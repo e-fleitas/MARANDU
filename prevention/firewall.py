@@ -83,10 +83,21 @@ def apply_firewall_hardening():
     else:
         print("⚠️ No se pudo determinar la interfaz de red principal de forma automatica.")
 
-    # 4. RECARGAR SI HUBO CAMBIOS PERMANENTES
-    print("[*] Asegurando regla de acceso SSH en la zona restrictiva...")
-    run_command(f"firewall-cmd --permanent --zone={TARGET_ZONE} --add-port=8000/tcp")
-    run_command(f"firewall-cmd --permanent --zone={TARGET_ZONE} --add-port=2222/tcp")
+    # 4. CONFIGURACIÓN DE PUERTOS PERMITIDOS EXPLICITAMENTE
+    # Comprobamos si el puerto del panel (8000) ya está añadido de forma permanente para evitar falsos positivos
+    _, check_8000 = run_command(f"firewall-cmd --permanent --zone={TARGET_ZONE} --query-port=8000/tcp")
+    if check_8000 != "yes":
+        print(f"[+] Abriendo puerto 8000/tcp de manera permanente en la zona '{TARGET_ZONE}'...")
+        run_command(f"firewall-cmd --permanent --zone={TARGET_ZONE} --add-port=8000/tcp")
+        changes_made = True
+
+    _, check_2222 = run_command(f"firewall-cmd --permanent --zone={TARGET_ZONE} --query-port=2222/tcp")
+    if check_2222 != "yes":
+        print(f"[+] Abriendo puerto 2222/tcp de manera permanente en la zona '{TARGET_ZONE}'...")
+        run_command(f"firewall-cmd --permanent --zone={TARGET_ZONE} --add-port=2222/tcp")
+        changes_made = True
+
+    # 5. RECARGAR SI HUBO CAMBIOS PERMANENTES
     if changes_made:
         print("[*] Aplicando cambios permanentes en las reglas de Firewalld...")
         run_command("firewall-cmd --reload")

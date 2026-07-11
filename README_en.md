@@ -60,6 +60,13 @@ MARANDU/
 └── requirements.txt    # Python dependencies
 
 ---
+## Operating System Requirements
+Before running the HIPS, ensure that the native dependencies are installed on Rocky Linux:
+
+```bash
+sudo dnf install -y policycoreutils-python-utils audit audit-rules firewalld rsyslog openssl python3-devel gcc authselect pgaudit_16 acl
+```
+---
 
 ## ⚙️ Quick Start
 

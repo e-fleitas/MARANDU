@@ -11,6 +11,34 @@ import argparse
 import os
 import subprocess
 import sys
+import os
+from pathlib import Path
+
+def ensure_auditctl_symlink():
+    """
+    Asegura de forma transparente que auditctl esté en /usr/bin/auditctl 
+    para compatibilidad global de los scripts de testeo.
+    """
+    target = Path("/usr/sbin/auditctl")
+    link = Path("/usr/bin/auditctl")
+    
+    if not target.exists():
+        print("[-] Advertencia HIPS: No se encontró 'auditctl' en /usr/sbin/. ¿Está instalado 'auditd'?", file=sys.stderr)
+        return
+
+    # Si el enlace ya existe y es correcto, no hacemos nada
+    if link.is_symlink() and link.resolve() == target:
+        return
+
+    print("[*] HIPS: Configurando enlaces de compatibilidad para herramientas de auditoría...")
+    try:
+        if link.exists() or link.is_symlink():
+            link.unlink() # Remueve enlaces rotos o archivos previos
+        
+        link.symlink_to(target)
+        print("[OK] Enlace simbólico de auditctl creado con éxito.")
+    except PermissionError:
+        print("[-] Advertencia HIPS: No se pudo crear el enlace en /usr/bin sin privilegios sudo.", file=sys.stderr)
 
 def parse_arguments():
     """Procesa los argumentos de línea de comandos para las credenciales de la DB."""
@@ -118,6 +146,8 @@ def verify_pgaudit(args):
     return val is not None and val != "" and val != "none"
 
 def main():
+    ensure_auditctl_symlink()
+
     args = parse_arguments()
 
     print("==================================================")

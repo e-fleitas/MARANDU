@@ -8,6 +8,33 @@ import argparse
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+def grant_postgres_permissions():
+    """
+    Configura permisos dinámicos con ACL para que el usuario 'postgres' 
+    pueda navegar por el proyecto y leer el script de validación.
+    Reemplaza la lógica de permisos de setup_env.sh.
+    """
+    print("[*] HIPS: Configurando permisos dinámicos para el entorno de PostgreSQL...")
+    
+    # Obtener la ruta raíz del proyecto de forma dinámica (asumiendo que db_auth.py está en prevention/)
+    proj_dir = Path(__file__).resolve().parent.parent
+    
+    # Rutas de los directorios padre para permitir la navegación (:x)
+    parent_1 = proj_dir.parent
+    parent_2 = parent_1.parent
+    
+    # Aplicar permisos de ejecución (:x) en la cadena de directorios
+    for path in [parent_2, parent_1, proj_dir, proj_dir / "tests"]:
+        if path.exists():
+            subprocess.run(["setfacl", "-m", "u:postgres:x", str(path)], stderr=subprocess.DEVNULL)
+            
+    # Otorgar permiso de lectura (:r) específicamente al validador
+    validator_path = proj_dir / "tests" / "db_hardening_check.py"
+    if validator_path.is_file():
+        subprocess.run(["setfacl", "-m", "u:postgres:r", str(validator_path)], stderr=subprocess.DEVNULL)
+        print("[OK] Permisos ACL aplicados de forma transparente para PostgreSQL.")
 
 # --- CONFIGURACIÓN DE RUTAS ---
 POSIBLES_RUTAS = ["/var/lib/pgsql/16/data", "/var/lib/pgsql/data"]
@@ -37,8 +64,11 @@ def main():
     if os.getuid() != 0:
         print("[-] Este script requiere privilegios de root.")
         sys.exit(1)
+    
 
     args = parse_arguments()
+    grant_postgres_permissions()
+    
     print("[*] Aplicando hardening...")
 
     # 1. Configuración global (auto.conf)

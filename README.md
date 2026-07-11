@@ -61,6 +61,13 @@ MARANDU/
 └── requirements.txt    # Dependencias Python
 
 ---
+## Requisitos del Sistema Operativo
+Antes de ejecutar el HIPS, asegúrese de instalar las dependencias nativas en Rocky Linux:
+
+```bash
+sudo dnf install -y policycoreutils-python-utils audit audit-rules firewalld rsyslog openssl python3-devel gcc authselect pgaudit_16 acl
+```
+---
 
 ## ⚙️ Instalación rápida
 
@@ -100,7 +107,7 @@ sudo python3 prevention/db_auth.py -p <TU_CONTRASEÑA> -d <TU_BD> -u postgres
 Para auditar que los controles se mantienen activos y configurados correctamente, utiliza la herramienta de verificación:
 
 ```bash
-sudo -u postgres python3 tests/db_hardening_check.py -d marandu_test -u postgres -H 127.0.0.1 -p <TU_CONTRASEÑA>
+sudo -u postgres python3 tests/db_hardening_check.py -d <TU_BD> -u postgres -H 127.0.0.1 -p <TU_CONTRASEÑA>
 ```
 Si todos los controles están correctos, el script mostrará [+] COMPLIANCE OK.
 ---
