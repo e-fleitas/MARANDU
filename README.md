@@ -84,6 +84,29 @@ uvicorn web.app:app --host 0.0.0.0 --port 8000
 
 ---
 
+## 🔒 Hardening de Base de Datos (PostgreSQL)
+
+El sistema incluye una suite de hardening para PostgreSQL basada en el estándar CIS.
+
+### Aplicación del Hardening
+Para aplicar automáticamente los 7 controles de seguridad sobre la base de datos (incluyendo TLS, roles, privilegios y auditoría), ejecuta:
+
+```bash
+sudo python3 prevention/db_auth.py -p <TU_CONTRASEÑA> -d <TU_BD> -u postgres
+```
+
+---
+## Verificación de Cumplimiento (Checker)
+Para auditar que los controles se mantienen activos y configurados correctamente, utiliza la herramienta de verificación:
+
+```bash
+sudo -u postgres python3 tests/db_hardening_check.py -d marandu_test -u postgres -H 127.0.0.1 -p <TU_CONTRASEÑA>
+```
+Si todos los controles están correctos, el script mostrará [+] COMPLIANCE OK.
+---
+
+---
+
 ## 📋 Módulos de Detección
 
 | #    | Módulo                         | Archivo                   |
