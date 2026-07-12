@@ -6,3 +6,4 @@ bcrypt>=4.0
 itsdangerous
 python-dotenv
 psutil
+asyncpg
