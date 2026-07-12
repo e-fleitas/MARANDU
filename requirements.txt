@@ -5,4 +5,6 @@ python-multipart
 passlib[bcrypt]
 itsdangerous
 python-dotenv
+psutil
+asyncpg
 psycopg2-binary
