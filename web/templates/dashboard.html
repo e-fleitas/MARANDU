@@ -82,7 +82,16 @@
             </div>
             {% endif %}
 
-            <form method="GET" action="/dashboard" class="space-y-4">
+            <!--
+                ⚡ Antes este form usaba method="GET", lo que mandaba db_password
+                como query string: quedaba en el historial del navegador, en los
+                logs de acceso del servidor/proxy y en el header Referer de
+                cualquier recurso externo cargado en la página. Con POST viaja
+                en el body de la request (sobre HTTPS, cifrado en tránsito) y
+                no queda registrado en ninguno de esos lugares.
+            -->
+            <form method="post" action="/dashboard" class="space-y-4">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-xs font-mono uppercase text-slate-400 mb-1" for="db_user_input">Usuario
