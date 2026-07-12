@@ -1,56 +1,70 @@
 #!/bin/bash
-# setup_env.sh - Instalador de dependencias para M.A.R.A.N.D.U
+# ==============================================================================
+# M.A.R.A.N.D.U. - Script de Configuración del Entorno (Rocky Linux 9)
+# ==============================================================================
+set -e
 
-echo "=== Instalando dependencias del Sistema Operativo para el HIPS ==="
-
-# Asegurar privilegios de root
+# Asegurar que se ejecuta con privilegios de root
 if [ "$EUID" -ne 0 ]; then
-  echo "Por favor, ejecuta este script usando sudo."
-  exit 1
+    echo "[!] Error: Este script debe ser ejecutado como root o usando sudo."
+    exit 1
 fi
 
-# 1. Actualizar repositorios e instalar herramientas de SELinux, Auditoría, Red y Cifrado
-dnf update -y
-dnf install -y policycoreutils-python-utils audit firewalld rsyslog openssl
+echo "=============================================================================="
+echo "[+] Iniciando configuración del entorno base para M.A.R.A.N.D.U..."
+echo "=============================================================================="
 
-# 2. Instalar dependencias para compilar cosas de Python si hiciera falta
-dnf install -y python3-devel gcc
+# 1. Instalar dependencias necesarias
+echo "[+] Instalando dependencias del sistema..."
+dnf install -y python3 python3-pip pgaudit_16 openssh-server audit
 
-# Asegurar rsyslog en el setup de dependencias del sistema
-dnf install -y rsyslog
-
-# Asegurar authselect para el hardening de PAM
-dnf install -y authselect
-
-# Asegurar las utilidades completas de administración de auditd
-dnf install -y audit
-dnf install -y audit-rules
-
-dnf install -y pgaudit_16
-
-# Agrega "acl" a tu lista de instalación de dnf
-dnf install -y policycoreutils-python-utils audit firewalld rsyslog openssl pgaudit_16 acl
-
-echo "=== Configurando permisos dinámicos para el auditor ==="
-# Detectar la ruta absoluta de la instalación actual
-PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PARENT_1="$(dirname "$PROJ_DIR")"
-PARENT_2="$(dirname "$PARENT_1")"
-
-# Otorgar permisos de ejecución (:x) necesarios para navegar hasta el script
-setfacl -m u:postgres:x "$PARENT_2" 2>/dev/null || true
-setfacl -m u:postgres:x "$PARENT_1" 2>/dev/null || true
-setfacl -m u:postgres:x "$PROJ_DIR"
-setfacl -m u:postgres:x "$PROJ_DIR/tests"
-
-# Otorgar permiso de lectura al validador
-if [ -f "$PROJ_DIR/tests/db_hardening_check.py" ]; then
-  setfacl -m u:postgres:r "$PROJ_DIR/tests/db_hardening_check.py"
-  echo "[OK] Permisos ACL aplicados de forma transparente para la entrega."
+# 2. Crear el usuario del sistema restringido 'marandu'
+if ! id "marandu" &>/dev/null; then
+    echo "[+] Creando usuario de sistema aislado 'marandu'..."
+    useradd -r -m -s /bin/bash marandu
+else
+    echo "[ ] El usuario 'marandu' ya existe en el sistema."
 fi
 
-echo "=== Configurando enlaces de compatibilidad para herramientas de auditoría ==="
-# Asegurar que auditctl esté visible en el PATH global para los scripts de testeo
-ln -sf /usr/sbin/auditctl /usr/bin/auditctl
+# Determinar directorio actual
+PROJ_DIR=$(pwd)
 
-echo "=== Dependencias del sistema instaladas correctamente ==="
+# 3. Configurar reglas granulares en Sudoers
+# Esto permite que el usuario 'marandu' ejecute los scripts sin pedir contraseña
+echo "[+] Configurando /etc/sudoers.d/marandu..."
+cat << EOF > /etc/sudoers.d/marandu
+# === Permisos para Scripts de Endurecimiento ===
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/ssh_hardening.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/selinux.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/sysctl.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/secure_tmp_mount.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/pam_faillock.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/password_hardening.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/rsyslog_centralization.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/firewall.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/auditd.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/db_auth.py
+
+# === Permisos para Módulos de Diagnóstico ===
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/tests/hardening_check.py
+marandu ALL=(root) NOPASSWD: /usr/bin/python3 $PROJ_DIR/tests/db_hardening_check.py
+
+# === Binarios Nativos ===
+marandu ALL=(root) NOPASSWD: /usr/sbin/sshd -T
+marandu ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
+EOF
+
+# Aplicar permisos restrictivos
+chmod 0440 /etc/sudoers.d/marandu
+
+# 4. Ajustar la propiedad y permisos del directorio
+# Esto garantiza que el usuario marandu sea dueño de los archivos y pueda ejecutarlos
+echo "[+] Aplicando propiedad a $PROJ_DIR..."
+chown -R marandu:marandu "$PROJ_DIR"
+chmod -R 750 "$PROJ_DIR"
+
+echo "=============================================================================="
+echo "[✓] Configuración finalizada."
+echo "Para continuar con la instalación web, ejecuta el siguiente comando:"
+echo "    sudo -u marandu ./setup_web.sh"
+echo "=============================================================================="

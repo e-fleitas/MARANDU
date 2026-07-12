@@ -1,0 +1,35 @@
+# Caddyfile — M.A.R.A.N.D.U. Dashboard
+#
+# Sirve el dashboard por HTTPS usando un certificado self-signed
+# generado y renovado automáticamente por la CA interna de Caddy
+# (no depende de un dominio público ni de Let's Encrypt).
+#
+# Reemplazá <IP_DEL_SERVIDOR> por la IP real de marandu-server
+# (la que usás dentro de tu red/VPN, ej: 10.0.0.5).
+
+<IP_DEL_SERVIDOR> {
+	tls internal
+
+	reverse_proxy 127.0.0.1:8000
+
+	# Cabeceras adicionales de seguridad a nivel de proxy.
+	# (Las de la app en app.py se mantienen; estas son un segundo cinturón).
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	encode gzip
+
+	log {
+		output file /var/log/caddy/marandu-access.log
+	}
+}
+
+# Opcional: si además querés poder entrar por localhost mientras hacés
+# pruebas directo en el server, descomentá este bloque.
+# localhost {
+# 	tls internal
+# 	reverse_proxy 127.0.0.1:8000
+# }

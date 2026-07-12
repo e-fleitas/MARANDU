@@ -253,6 +253,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"[-] Error fatal en process_monitor: {e}", file=sys.stderr)
         sys.exit(1)
-
-
-

@@ -25,17 +25,27 @@ import subprocess
 import ipaddress
 from datetime import datetime, timezone
 
+# --------------------------------------------------------------------------
+# Configuración (prefijo MRND_ según convención de variables de entorno)
+# --------------------------------------------------------------------------
+
 MODULO_NOMBRE = "modulo_ii"
 TIPO_ALARMA = "USUARIO_SOSPECHOSO"
 
+# Directorio mandatorio de logs (definido también en prevention/rsyslog_centralization.py)
 LOGS_DIR_PRINCIPAL = "/var/log/hips"
 LOGS_DIR_FALLBACK = os.path.join(os.getcwd(), "logs")
 LOG_FILE_NAME = "users_monitor.log"
 
+# IPs/orígenes que NO deben disparar alarma (ej: tu propia IP de ZeroTier
+# mientras probás por SSH, o la IP de tu compañero).
+# Se puede sobreescribir con la variable de entorno MRND_TRUSTED_IPS
+# separando valores por coma, ej: "10.186.164.108,10.186.0.0/16"
 _DEFAULT_TRUSTED = ["127.0.0.1", "::1"]
 
 
 def _cargar_ips_confiables():
+    """Lee MRND_TRUSTED_IPS del entorno y arma la lista final de redes/IPs confiables."""
     confiables = list(_DEFAULT_TRUSTED)
     raw_env = os.environ.get("MRND_TRUSTED_IPS", "")
     if raw_env:
@@ -48,12 +58,22 @@ def _cargar_ips_confiables():
 
 TRUSTED_SOURCES = _cargar_ips_confiables()
 
+# Usuarios de sistema que jamás deben considerarse "sospechosos" por sí solos
 USUARIOS_BASELINE = set(
     filter(None, os.environ.get("MRND_BASELINE_USERS", "root").split(","))
 )
 
 
+# --------------------------------------------------------------------------
+# Utilidades de ejecución de comandos (con manejo de errores extremo)
+# --------------------------------------------------------------------------
+
 def ejecutar_comando(comando, timeout=5):
+    """
+    Ejecuta un comando del sistema de forma segura.
+    Devuelve (True, stdout) en éxito o (False, mensaje_error) en fallo.
+    Nunca lanza una excepción hacia el llamador.
+    """
     try:
         resultado = subprocess.run(
             comando,
@@ -70,10 +90,16 @@ def ejecutar_comando(comando, timeout=5):
         return False, f"Timeout ejecutando: {' '.join(comando)}"
     except subprocess.CalledProcessError as e:
         return False, f"Error de ejecución ({e.returncode}): {e.stderr.strip() if e.stderr else 'sin detalle'}"
-    except Exception as e:
+    except Exception as e:  # Resiliencia extrema: nunca debe morir el módulo por esto
         return False, f"Error inesperado ejecutando comando: {e}"
 
 
+# --------------------------------------------------------------------------
+# Parseo de sesiones activas
+# --------------------------------------------------------------------------
+
+# Ejemplo típico de línea 'who':
+# dan      pts/0        2026-07-12 14:03 (10.186.164.1)
 _PATRON_WHO = re.compile(
     r"^(?P<usuario>\S+)\s+(?P<tty>\S+)\s+(?P<fecha>\d{4}-\d{2}-\d{2})\s+(?P<hora>\d{2}:\d{2})"
     r"(?:\s+\((?P<origen>[^)]+)\))?"
@@ -81,6 +107,11 @@ _PATRON_WHO = re.compile(
 
 
 def obtener_sesiones_activas():
+    """
+    Obtiene la lista de sesiones activas parseando la salida de 'who'.
+    Devuelve una lista de dicts: {usuario, tty, timestamp, origen_ip}
+    En caso de error de ejecución, devuelve lista vacía (falla segura, no falla ruidosa).
+    """
     ok, salida = ejecutar_comando(["who"])
     if not ok:
         print(f"[-] No se pudo obtener sesiones activas: {salida}", file=sys.stderr)
@@ -93,6 +124,8 @@ def obtener_sesiones_activas():
             continue
         match = _PATRON_WHO.match(linea)
         if not match:
+            # Línea con formato inesperado: la registramos para diagnóstico,
+            # pero no interrumpimos el procesamiento del resto.
             print(f"[!] Línea de 'who' no reconocida, se omite: {linea}", file=sys.stderr)
             continue
 
@@ -109,13 +142,23 @@ def obtener_sesiones_activas():
     return sesiones
 
 
+# --------------------------------------------------------------------------
+# Evaluación de confiabilidad del origen
+# --------------------------------------------------------------------------
+
 def origen_es_confiable(origen):
+    """
+    Determina si un origen (IP o 'local') está dentro de la lista de fuentes
+    confiables. Maneja tanto IPs sueltas como rangos CIDR en TRUSTED_SOURCES.
+    """
     if origen == "local":
         return True
 
     try:
         ip_origen = ipaddress.ip_address(origen)
     except ValueError:
+        # Si 'who' devolvió un hostname en vez de IP, no podemos validarlo
+        # como confiable: lo tratamos como no confiable por precaución.
         return False
 
     for fuente in TRUSTED_SOURCES:
@@ -127,6 +170,8 @@ def origen_es_confiable(origen):
                 if ip_origen == ipaddress.ip_address(fuente):
                     return True
         except ValueError:
+            # Entrada mal configurada en MRND_TRUSTED_IPS: la ignoramos
+            # sin romper la evaluación de las demás.
             print(f"[!] Entrada inválida en MRND_TRUSTED_IPS ignorada: {fuente}", file=sys.stderr)
             continue
 
@@ -134,8 +179,17 @@ def origen_es_confiable(origen):
 
 
 def evaluar_sesion(sesion):
+    """
+    Decide si una sesión activa debe disparar alarma.
+    Regla: se alarma si el origen NO es confiable, sin importar el usuario
+    (un usuario legítimo desde una IP desconocida también es sospechoso).
+    """
     return not origen_es_confiable(sesion["origen_ip"])
 
+
+# --------------------------------------------------------------------------
+# Construcción de la alarma (mapea a columnas de la tabla 'alarmas')
+# --------------------------------------------------------------------------
 
 def construir_alarma(sesion):
     return {
@@ -152,7 +206,13 @@ def construir_alarma(sesion):
     }
 
 
+# --------------------------------------------------------------------------
+# Emisión de la alarma: intenta usar el logger central de Julián;
+# si todavía no existe, usa un fallback local para no bloquear tu desarrollo.
+# --------------------------------------------------------------------------
+
 def _resolver_directorio_logs():
+    """Elige el directorio de logs mandatorio si es escribible, o el fallback local."""
     try:
         os.makedirs(LOGS_DIR_PRINCIPAL, mode=0o750, exist_ok=True)
         if os.access(LOGS_DIR_PRINCIPAL, os.W_OK):
@@ -172,6 +232,7 @@ def _resolver_directorio_logs():
 
 
 def _emitir_alarma_fallback(alarma):
+    """Escribe la alarma en formato JSON-line mientras alerts/logger.py no exista."""
     directorio = _resolver_directorio_logs()
     if directorio is None:
         print(f"[-] ALARMA NO PERSISTIDA (sin directorio de logs disponible): {alarma}", file=sys.stderr)
@@ -188,6 +249,11 @@ def _emitir_alarma_fallback(alarma):
 
 
 def emitir_alarma(alarma):
+    """
+    Punto único de emisión de alarmas para este módulo.
+    Intenta delegar en alerts.logger.log_event (de Julián); si ese módulo
+    todavía no expone la función, cae al fallback local sin romper ejecución.
+    """
     try:
         from alerts.logger import log_event  # type: ignore
         return log_event(alarma)
@@ -201,7 +267,15 @@ def emitir_alarma(alarma):
         return _emitir_alarma_fallback(alarma)
 
 
+# --------------------------------------------------------------------------
+# Punto de entrada del módulo
+# --------------------------------------------------------------------------
+
 def verificar_usuarios_conectados():
+    """
+    Ejecuta una pasada de verificación: obtiene sesiones activas, evalúa cada
+    una y emite alarma para las sospechosas. Devuelve la cantidad de alarmas emitidas.
+    """
     sesiones = obtener_sesiones_activas()
     if not sesiones:
         print("[.] No hay sesiones activas o no se pudieron leer.")
@@ -216,6 +290,7 @@ def verificar_usuarios_conectados():
                     alarmas_emitidas += 1
                     print(f"[ALARMA] {TIPO_ALARMA} :: usuario={sesion['usuario']} :: origen={sesion['origen_ip']}")
         except Exception as e:
+            # Ninguna sesión individual debe tumbar el procesamiento de las demás.
             print(f"[-] Error procesando sesión {sesion}: {e}", file=sys.stderr)
             continue
 

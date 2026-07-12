@@ -1,14 +1,13 @@
+#!/usr/bin/env python3
 import os
 import subprocess
 import re
 
-if os.geteuid() != 0:
-    print("Este script debe ejecutarse como root (sudo).")
-    exit(1)
 
 def verify_ssh_hardening():
     try:
-        result = subprocess.run(["sshd", "-T"], capture_output=True, text=True, check=True)
+        # Se añade 'sudo -n' para permitir que el usuario marandu consulte la directiva del sistema
+        result = subprocess.run(["sudo", "-n", "sshd", "-T"], capture_output=True, text=True, check=True)
         output = result.stdout.lower()
         root_disabled = "permitrootlogin no" in output
         custom_port = "port 2222" in output
@@ -95,7 +94,8 @@ def verify_auditd_rules():
         status_check = subprocess.run(["systemctl", "is-active", "auditd"], capture_output=True, text=True)
         if status_check.stdout.strip() != "active":
             return False
-        rules_check = subprocess.run(["auditctl", "-l"], capture_output=True, text=True)
+        # Se añade 'sudo -n' para permitir listar las reglas del kernel sin privilegios directos de root
+        rules_check = subprocess.run(["sudo", "-n", "auditctl", "-l"], capture_output=True, text=True)
         output = rules_check.stdout
         return any(x in output for x in ["/etc/passwd", "/etc/shadow", "/etc/sudoers"])
     except Exception:
