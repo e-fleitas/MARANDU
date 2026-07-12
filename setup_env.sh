@@ -1,92 +1,71 @@
 #!/bin/bash
-# setup_env.sh - Configurador del Sistema Operativo y Permisos para M.A.R.A.N.D.U
+# ==============================================================================
+# M.A.R.A.N.D.U. - Script de Configuración del Entorno (Rocky Linux 9)
+# ==============================================================================
+set -e
 
-echo "================================================================="
-echo "=== [PASO 1] Configurando Sistema Operativo y Usuario HIPS ====="
-echo "================================================================="
-
-# Asegurar privilegios de root para este script elemental
+# Asegurar que se ejecuta con privilegios de root
 if [ "$EUID" -ne 0 ]; then
-  echo "[-] Error: Por favor, ejecuta este script usando sudo (sudo ./setup_env.sh)."
-  exit 1
+    echo "[!] Error: Este script debe ser ejecutado como root o usando sudo."
+    exit 1
 fi
 
-# Detectar la ruta absoluta de la instalación actual
-PROJ_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PARENT_1="$(dirname "$PROJ_DIR")"
-PARENT_2="$(dirname "$PARENT_1")"
+echo "=============================================================================="
+echo "[+] Iniciando configuración del entorno base para M.A.R.A.N.D.U..."
+echo "=============================================================================="
 
-# 1. Actualizar repositorios e instalar paquetes de Rocky Linux
-echo "[+] Actualizando el gestor de paquetes DNF..."
-dnf update -y
+# 1. Agregar repositorio oficial de PostgreSQL (Requisito para pgaudit_16)
+echo "[+] Configurando repositorio oficial de PostgreSQL (PGDG) para pgaudit..."
+dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm
 
-echo "[+] Instalando herramientas de seguridad, auditoría, bases de datos y desarrollo..."
-dnf install -y \
-  policycoreutils-python-utils \
-  audit \
-  audit-rules \
-  firewalld \
-  rsyslog \
-  openssl \
-  authselect \
-  acl \
-  pgaudit_16 \
-  python3-devel \
-  gcc
+# 2. Instalar dependencias del sistema operativo
+echo "[+] Instalando paquetes y dependencias del sistema..."
+dnf install -y python3 python3-pip python3-devel gcc pgaudit_16 openssh-server audit
 
-echo "[+] Configurando enlaces de compatibilidad para herramientas de auditoría..."
-ln -sf /usr/sbin/auditctl /usr/bin/auditctl
-
-# 2. Creación y Aislamiento del usuario dedicado 'marandu'
-echo "[+] Creando usuario del sistema 'marandu'..."
+# 3. Crear el usuario del sistema restringido 'marandu'
 if ! id "marandu" &>/dev/null; then
-  # Se crea como usuario de sistema, con home directory propio para su entorno de ejecución
-  useradd -r -m -s /bin/bash marandu
-  echo "[OK] Usuario 'marandu' creado."
+    echo "[+] Creando usuario de sistema aislado 'marandu'..."
+    useradd -r -m -s /bin/bash marandu
 else
-  echo "[*] El usuario 'marandu' ya existe en el sistema."
+    echo "[ ] El usuario 'marandu' ya existe en el sistema."
 fi
 
-echo "[+] Configurando directorios de almacenamiento de alertas y logs..."
-mkdir -p /var/log/hips
-chown -R marandu:marandu /var/log/hips
-chmod 750 /var/log/hips
+# Determinar de forma dinámica el directorio actual del proyecto
+PROJ_DIR=$(pwd)
 
-# Entregar la propiedad del repositorio clonado a marandu para que gestione su venv
-chown -R marandu:marandu "$PROJ_DIR"
-
-# 3. Configuración de privilegios granulares en Sudoers
-echo "[+] Aplicando políticas estrictas en /etc/sudoers.d/marandu..."
+# 4. Configurar reglas granulares en Sudoers (Principio de Mínimos Privilegios)
+# Se incluyen los binarios nativos del OS para evitar bloqueos en el Dashboard Web.
+echo "[+] Inyectando directivas de ejecución segura en /etc/sudoers.d/marandu..."
 cat << EOF > /etc/sudoers.d/marandu
-# Permitir a marandu ejecutar UNICAMENTE los scripts funcionales de hardening con sudo sin password
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/ssh_hardening.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/db_auth.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/firewall.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/selinux.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/sysctl.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/secure_tmp_mount.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/auditd.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/pam_faillock.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/password_hardening.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/prevention/banner.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/tests/hardening_check.py
-marandu ALL=(ALL) NOPASSWD: /usr/bin/python3 $PROJ_DIR/tests/db_hardening_check.py
+# === Permisos para Scripts de Endurecimiento de M.A.R.A.N.D.U. ===
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/ssh_hardening.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/selinux.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/sysctl.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/secure_tmp_mount.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/pam_faillock.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/password_hardening.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/prevention/rsyslog_centralization.py
+
+# === Permisos para Módulos de Diagnóstico y Auditoría ===
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/tests/hardening_check.py
+marandu ALL=(root) NOPASSWD: $PROJ_DIR/tests/db_hardening_check.py
+
+# === Binarios Nativos del Sistema requeridos por los análisis de Python ===
+marandu ALL=(root) NOPASSWD: /usr/sbin/sshd -T
+marandu ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
 EOF
+
+# Aplicar permisos restrictivos correctos al archivo de sudoers
 chmod 0440 /etc/sudoers.d/marandu
+echo "[+] Archivo /etc/sudoers.d/marandu configurado correctamente."
 
-# 4. Configurar permisos dinámicos (ACLs) para el auditor de la base de datos
-echo "[+] Aplicando permisos ACL de tránsito para el usuario postgres..."
-setfacl -m u:postgres:x "$PARENT_2" 2>/dev/null || true
-setfacl -m u:postgres:x "$PARENT_1" 2>/dev/null || true
-setfacl -m u:postgres:x "$PROJ_DIR"
-setfacl -m u:postgres:x "$PROJ_DIR/tests"
+# 5. Ajustar la propiedad y permisos del directorio del proyecto
+echo "[+] Aplicando políticas de propiedad (ACL) al directorio del proyecto..."
+chown -R marandu:marandu "$PROJ_DIR"
+chmod -R 750 "$PROJ_DIR"
 
-if [ -f "$PROJ_DIR/tests/db_hardening_check.py" ]; then
-  setfacl -m u:postgres:r "$PROJ_DIR/tests/db_hardening_check.py"
-  echo "[OK] Permisos ACL aplicados correctamente para la entrega."
-fi
-
-echo "================================================================="
-echo "[OK] Fase del Sistema Operativo completada con éxito."
-echo "[*] Siguiente paso, ejecuta: sudo -u marandu ./setup_web.sh"
-echo "================================================================="
+echo "=============================================================================="
+echo "[✓] FASE 1 COMPLETADA: Entorno y privilegios del sistema configurados."
+echo "Para continuar con la instalación web, ejecuta el siguiente comando:"
+echo "    sudo -u marandu ./setup_web.sh"
+echo "=============================================================================="
