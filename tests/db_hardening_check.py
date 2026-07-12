@@ -180,5 +180,31 @@ def main():
         print("[-] COMPLIANCE FAIL: Se detectaron debilidades de hardening.")
         sys.exit(1)
 
+# Agregar esto al final de tests/db_hardening_check.py (justo antes de if __name__ == "__main__":)
+
+class WebArgs:
+    """Clase auxiliar para emular los argumentos de argparse desde la web."""
+    def __init__(self, host, port, user, dbname, password):
+        self.host = host
+        self.port = port
+        self.user = user
+        self.dbname = dbname
+        self.password = password
+
+def get_db_hardening_status_dict(host, port, user, dbname, password=None):
+    """Ejecuta los 7 controles CIS y retorna un diccionario con los resultados."""
+    args = WebArgs(host, port, user, dbname, password)
+    ensure_auditctl_symlink() # Mantiene la compatibilidad HIPS del script Original
+    
+    return {
+        "Cifrado TLS/SSL Activo (ssl=on)": verify_encryption(args),
+        "Rol 'marandu_app' sin Superusuario": verify_app_role(args),
+        "Registro de Auditoría (connections/disconnections)": verify_session_logging(args),
+        "Control Restrictivo de Hosts (pg_hba.conf sin md5)": verify_pg_hba_rules(args),
+        "Algoritmo de Hashing Seguro (scram-sha-256)": verify_auth_method(args),
+        "Restricción de Privilegios Públicos en Schema Public": verify_public_privileges(args),
+        "Extensión pgaudit Instalada y Configurada": verify_pgaudit(args)
+    }
+
 if __name__ == "__main__":
     main()

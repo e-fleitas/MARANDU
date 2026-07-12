@@ -32,52 +32,155 @@
             </div>
         </header>
 
-        <!-- Grilla de Controles -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <!-- SECCIÓN 1: CONTROLES DEL SISTEMA OPERATIVO -->
+        <h2 class="text-xl font-bold text-slate-300 mb-4 tracking-tight">1. Hardening de Sistema Operativo</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
             {% for control in controls %}
             <div
                 class="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col justify-between shadow-lg transition-all hover:border-slate-600">
                 <div>
                     <div class="flex justify-between items-start mb-3">
-                        <span class="text-xs font-mono tracking-wider text-slate-400 uppercase">Control {{ loop.index
+                        <span class="text-xs font-mono tracking-wider text-slate-400 uppercase">OS Control {{ loop.index
                             }}</span>
-
-                        <!-- Badge Dinámico de Estado -->
                         {% if control.active %}
                         <span
-                            class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full">
-                            Cumple (CIS)
-                        </span>
+                            class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full">Cumple
+                            (CIS)</span>
                         {% else %}
                         <span
-                            class="bg-rose-500/10 text-rose-400 border border-rose-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full animate-pulse">
-                            Vulnerable
-                        </span>
+                            class="bg-rose-500/10 text-rose-400 border border-rose-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full animate-pulse">Vulnerable</span>
                         {% endif %}
                     </div>
                     <h3 class="text-lg font-medium text-slate-200">{{ control.description }}</h3>
                 </div>
-
                 <div class="mt-6 flex items-center justify-between gap-4 pt-4 border-t border-slate-700/50">
                     <span class="text-xs text-slate-400 font-mono">id: {{ control.id }}</span>
-
-                    <!-- Botón de Acción Directa -->
-                    <button onclick="applyHardening('{{ control.id }}', this)" class="px-4 py-2 text-xs font-semibold rounded-lg border transition-all cursor-pointer
-                        {% if control.active %}
-                            bg-slate-700 text-slate-400 border-slate-600 cursor-not-allowed opacity-60
-                        {% else %}
-                            bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-900/20
-                        {% endif %}" {% if control.active %} disabled {% endif %}>
+                    <button onclick="applyHardening('{{ control.id }}', this)"
+                        class="px-4 py-2 text-xs font-semibold rounded-lg border transition-all cursor-pointer
+                        {% if control.active %} bg-slate-700 text-slate-400 border-slate-600 cursor-not-allowed opacity-60 {% else %} bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-900/20 {% endif %}"
+                        {% if control.active %} disabled {% endif %}>
                         {% if control.active %} Hardened {% else %} Aplicar Medida {% endif %}
                     </button>
                 </div>
             </div>
             {% endfor %}
         </div>
+
+        <!-- SECCIÓN 2: CONTROLES DE LA BASE DE DATOS (POSTGRESQL) -->
+        <h2 class="text-xl font-bold text-slate-300 mb-4 tracking-tight">2. Hardening de Base de Datos (PostgreSQL)</h2>
+
+        {% if necesita_credenciales %}
+        <!-- FORMULARIO GRÁFICO INICIAL -->
+        <div class="bg-slate-800 border border-slate-700 rounded-xl p-6 shadow-lg max-w-2xl">
+            <h3 class="text-lg font-bold text-blue-400 mb-2">Se requiere autenticación para PostgreSQL</h3>
+            <p class="text-sm text-slate-400 mb-5">Ingresá las credenciales administrativas para auditar las directivas
+                de seguridad CIS.</p>
+
+            {% if error_db %}
+            <div class="bg-rose-500/10 border border-rose-500/30 rounded-lg p-3 mb-5 text-sm text-rose-400 font-mono">
+                {{ error_db }}
+            </div>
+            {% endif %}
+
+            <form method="GET" action="/dashboard" class="space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs font-mono uppercase text-slate-400 mb-1" for="db_user_input">Usuario
+                            Admin DB</label>
+                        <input id="db_user_input" name="db_user" type="text" value="{{ db_user }}" required
+                            class="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 font-mono">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-mono uppercase text-slate-400 mb-1" for="db_name_input">Nombre
+                            de la DB</label>
+                        <input id="db_name_input" name="db_name" type="text" value="{{ db_name }}" required
+                            class="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 font-mono">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-mono uppercase text-slate-400 mb-1"
+                        for="db_password_input">Contraseña de Postgres</label>
+                    <input id="db_password_input" name="db_password" type="password" required placeholder="••••••••"
+                        class="w-full bg-slate-900 border border-slate-700 rounded-md px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500 font-mono">
+                </div>
+                <button type="submit"
+                    class="bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold px-5 py-2.5 rounded-lg border border-blue-500 shadow-md transition-all cursor-pointer font-mono">
+                    Conectar &amp; Auditar Base de Datos
+                </button>
+            </form>
+        </div>
+
+        {% else %}
+        <!-- PANEL DE ESTADO Y GRILLA DE CONTROLES DE DB -->
+        <div
+            class="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-6 shadow-lg flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+            <div>
+                <span class="text-xs font-mono text-emerald-400 uppercase tracking-wider font-semibold">● Sesión de
+                    Diagnóstico Activa</span>
+                <p class="text-sm text-slate-300 mt-0.5">Auditando entorno como <code
+                        class="text-blue-400 font-mono">{{ db_user }}</code> en la base <code
+                        class="text-blue-400 font-mono">{{ db_name }}</code>.</p>
+            </div>
+            <!-- Inputs ocultos para preservar los parámetros en las acciones del script sin perder los datos -->
+            <input id="db_user_input" type="hidden" value="{{ db_user }}">
+            <input id="db_name_input" type="hidden" value="{{ db_name }}">
+
+            <a href="/dashboard"
+                class="text-center bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-mono px-4 py-2 rounded-lg border border-slate-600 transition-all">
+                Desconectarse de la DB
+            </a>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {% for db_control in db_controls %}
+            <div
+                class="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col justify-between shadow-lg transition-all hover:border-slate-600">
+                <div>
+                    <div class="flex justify-between items-start mb-3">
+                        <span class="text-xs font-mono tracking-wider text-slate-400 uppercase">DB Control {{ loop.index
+                            }}</span>
+                        {% if db_control.active %}
+                        <span
+                            class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full">Cumple
+                            (CIS)</span>
+                        {% else %}
+                        <span
+                            class="bg-rose-500/10 text-rose-400 border border-rose-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full animate-pulse">Vulnerable</span>
+                        {% endif %}
+                    </div>
+                    <h3 class="text-lg font-medium text-slate-200">{{ db_control.description }}</h3>
+                </div>
+                <div class="mt-6 flex items-center justify-between gap-4 pt-4 border-t border-slate-700/50">
+                    <span class="text-xs text-slate-400 font-mono">id: {{ db_control.id }}</span>
+                    <button onclick="applyHardening('{{ db_control.id }}', this)"
+                        class="px-4 py-2 text-xs font-semibold rounded-lg border transition-all cursor-pointer
+                        {% if db_control.active %} bg-slate-700 text-slate-400 border-slate-600 cursor-not-allowed opacity-60 {% else %} bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-900/20 {% endif %}"
+                        {% if db_control.active %} disabled {% endif %}>
+                        {% if db_control.active %} Hardened {% else %} Aplicar Medida {% endif %}
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
     </div>
 
     <script>
         const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
+
+        // Extrae la contraseña dinámicamente de la URL si ya estamos autenticados en el Dashboard
+        function getDbPasswordFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('db_password') || '';
+        }
+
+        // Refresca la vista conservando usuario y base de datos
+        function refreshAuditWithWebParams() {
+            const dbUser = document.getElementById('db_user_input').value;
+            const dbName = document.getElementById('db_name_input').value;
+            const dbPass = getDbPasswordFromUrl();
+            window.location.href = `/dashboard?db_user=${encodeURIComponent(dbUser)}&db_name=${encodeURIComponent(dbName)}&db_password=${encodeURIComponent(dbPass)}`;
+        }
 
         async function applyHardening(controlId, buttonElement) {
             if (!confirm(`¿Estás seguro de que deseas aplicar el hardening para: ${controlId}?`)) return;
@@ -87,14 +190,25 @@
             buttonElement.disabled = true;
             buttonElement.classList.add('opacity-50', 'cursor-wait');
 
+            // Preparar el cuerpo JSON de la solicitud enviando las credenciales dinámicas de la web
+            let payload = {};
+            if (controlId.startsWith('db_')) {
+                payload.db_user = document.getElementById('db_user_input').value;
+                payload.db_name = document.getElementById('db_name_input').value;
+                payload.db_password = getDbPasswordFromUrl(); // Enviamos la contraseña ingresada gráficamente
+            }
+
             try {
                 const response = await fetch(`/prevention/apply/${controlId}`, {
                     method: 'POST',
-                    headers: { 'X-CSRF-Token': CSRF_TOKEN }
+                    headers: {
+                        'X-CSRF-Token': CSRF_TOKEN,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
                 });
 
                 if (response.status === 401 || response.status === 303) {
-                    // La sesión expiró: mandamos al login.
                     window.location.href = '/login';
                     return;
                 }
@@ -103,7 +217,7 @@
 
                 if (response.ok) {
                     alert(`Éxito: ${data.message}`);
-                    window.location.reload();
+                    refreshAuditWithWebParams();
                 } else {
                     alert(`Error: ${data.detail}`);
                     buttonElement.innerText = originalText;
