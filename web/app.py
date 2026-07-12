@@ -2,7 +2,7 @@ import os
 import subprocess
 from dotenv import load_dotenv
 from pathlib import Path
-import bcrypt  # Requerido para verificar el hash del .env
+import bcrypt
 from fastapi import FastAPI, Request, Depends, HTTPException, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -11,18 +11,24 @@ from starlette.middleware.sessions import SessionMiddleware
 # ==============================================================================
 # 1. CONFIGURACIÓN DE RUTAS Y ENTORNO
 # ==============================================================================
-# BASE_DIR se calcula de primero para evitar NameError en cascada
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-# ⚡ ¡AGREGÁ ESTA LÍNEA ACÁ! Para que busque y cargue el archivo de la raíz
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 # Rutas físicas hacia los scripts de remediación
 DB_AUTH_SCRIPT = str(BASE_DIR / "prevention" / "db_auth.py")
 
+# ⚡ MAPEO DE TODOS LOS SCRIPTS DE HARDENING DE OS (Carpeta prevention/)
 STRATEGY_SCRIPTS = {
-    "os_shm": str(BASE_DIR / "prevention" / "os_shm.py"),
-    "os_aslr": str(BASE_DIR / "prevention" / "os_aslr.py"),
+    "ssh_hardening": str(BASE_DIR / "prevention" / "ssh_hardening.py"),
+    "rsyslog_centralized": str(BASE_DIR / "prevention" / "rsyslog_centralization.py"),
+    "banner_login": str(BASE_DIR / "prevention" / "banner.py"),
+    "selinux_enforcing": str(BASE_DIR / "prevention" / "selinux.py"),
+    "firewall_restrictive": str(BASE_DIR / "prevention" / "firewall.py"),
+    "pam_faillock": str(BASE_DIR / "prevention" / "pam_faillock.py"),
+    "sysctl_network": str(BASE_DIR / "prevention" / "sysctl.py"),
+    "auditd_rules": str(BASE_DIR / "prevention" / "auditd.py"),
+    "pam_pwquality": str(BASE_DIR / "prevention" / "password_hardening.py"),
+    "tmp_mount": str(BASE_DIR / "prevention" / "secure_tmp_mount.py"),
 }
 
 # ==============================================================================
@@ -30,18 +36,14 @@ STRATEGY_SCRIPTS = {
 # ==============================================================================
 app = FastAPI(title="MARANDU HIPS")
 
-# Extracción de directivas del archivo .env
 SECRET_KEY = os.environ.get("MARANDU_SECRET_KEY", "clave_defecto_marandu_32_bytes_minimo")
 COOKIE_SECURE = os.environ.get("MARANDU_COOKIE_SECURE", "false").lower() == "true"
-
-# Montaje estructural del SessionMiddleware para evitar el AssertionError
-# Modificación en web/app.py
 
 app.add_middleware(
     SessionMiddleware, 
     secret_key=SECRET_KEY,
     session_cookie="marandu_session",
-    https_only=COOKIE_SECURE,  # <-- CAMBIAR 'secure' POR 'https_only'
+    https_only=COOKIE_SECURE,
     same_site="lax"
 )
 
@@ -51,10 +53,21 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
 # 3. IMPORTACIONES Y MAPEOS DEL PROYECTO
 # ==============================================================================
 from tests.db_hardening_check import get_db_hardening_status_dict
+# ⚡ IMPORTAMOS TU AUDITORÍA REAL DE SISTEMA OPERATIVO
+from tests.hardening_check import get_hardening_status as get_os_hardening_status
 
+# ⚡ MAPEO EXACTO DE LAS DESCRIPCIONES DE hardening_check.py HACIA LOS IDS
 MAPPING_KEYS = {
-    "Protección de Memoria Compartida (/dev/shm)": "os_shm",
-    "Aleatorización del Espacio de Direcciones (ASLR)": "os_aslr",
+    "SSH Hardening completo (root + puerto + clave)": "ssh_hardening",
+    "rsyslog centralizado": "rsyslog_centralized",
+    "Banner de login": "banner_login",
+    "SELinux en modo Enforcing": "selinux_enforcing",
+    "firewalld zona restrictiva": "firewall_restrictive",
+    "pam_faillock bloqueo por intentos fallidos": "pam_faillock",
+    "parámetros sysctl de red seguros": "sysctl_network",
+    "auditd reglas de auditoría": "auditd_rules",
+    "Política de contraseñas (PAM pwquality)": "pam_pwquality",
+    "Montaje /tmp con noexec y nosuid": "tmp_mount",
 }
 
 DB_MAPPING_KEYS = {
@@ -71,53 +84,34 @@ DB_MAPPING_KEYS = {
 # 4. DEPENDENCIAS DE CONTROL DE ACCESO Y SEGURIDAD
 # ==============================================================================
 def login_required(request: Request):
-    """Verifica si el usuario en sesión coincide con el administrador del .env."""
     user = request.session.get("user")
     admin_user = os.environ.get("MARANDU_ADMIN_USER", "admin")
-
     if not user or user != admin_user:
         raise HTTPException(status_code=401, detail="Sesión inválida o no autorizada.")
     return user
 
 def get_csrf_token(request: Request) -> str:
-    """Retorna un token de validación CSRF estático para la interfaz."""
     return "token_secreto_marandu_hips"
 
 def verify_csrf(request: Request, token: str) -> bool:
-    """Valida la integridad del token CSRF."""
     return token == "token_secreto_marandu_hips"
-
-def get_hardening_status():
-    """Simulación/Auditoría local de controles de Sistema Operativo."""
-    return {
-        "Protección de Memoria Compartida (/dev/shm)": True,
-        "Aleatorización del Espacio de Direcciones (ASLR)": False
-    }
 
 # ==============================================================================
 # 5. ENDPOINTS DE AUTENTICACIÓN CENTRALIZADA
 # ==============================================================================
 @app.get("/login", response_class=HTMLResponse)
 async def get_login_page(request: Request):
-    """Muestra el formulario HTML de inicio de sesión."""
     return templates.TemplateResponse(request=request, name="login.html")
+
 @app.post("/login")
 async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    """Valida credenciales usando checkpw contra el hash bcrypt del .env."""
     admin_user = os.environ.get("MARANDU_ADMIN_USER", "admin")
     admin_hash = os.environ.get("MARANDU_ADMIN_PASSWORD_HASH", "")
 
-    if username != admin_user:
+    if username != admin_user or not admin_hash:
         raise HTTPException(status_code=400, detail="Usuario o contraseña incorrectos.")
 
-    if not admin_hash:
-        raise HTTPException(status_code=500, detail="Error de entorno: Falta la firma HASH.")
-
-    # Bcrypt requiere que los inputs sean casteados a bytes obligatoriamente
-    password_bytes = password.encode("utf-8")
-    hash_bytes = admin_hash.encode("utf-8")
-
-    if bcrypt.checkpw(password_bytes, hash_bytes):
+    if bcrypt.checkpw(password.encode("utf-8"), admin_hash.encode("utf-8")):
         request.session["user"] = username
         return RedirectResponse(url="/dashboard", status_code=303)
     else:
@@ -125,7 +119,6 @@ async def login(request: Request, username: str = Form(...), password: str = For
 
 @app.post("/logout")
 async def logout(request: Request):
-    """Destruye los datos temporales del cliente en la cookie."""
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
@@ -135,13 +128,13 @@ async def logout(request: Request):
 @app.get("/dashboard", response_class=HTMLResponse)
 async def read_dashboard(
     request: Request, 
-    db_user: str = None,      # Cambiado a None por defecto para detectar si el usuario interactuó
-    db_name: str = None,      # Cambiado a None por defecto
-    db_password: str = None,  # Captura la contraseña desde el formulario gráfico
+    db_user: str = None,
+    db_name: str = None,
+    db_password: str = None,
     user: str = Depends(login_required)
 ):
-    # --- 1. Evaluación Automática de Sistema Operativo ---
-    raw_status = get_hardening_status()
+    # --- 1. Evaluación Real de Sistema Operativo ---
+    raw_status = get_os_hardening_status() # ⚡ LLAMA A LOS 10 CONTROLES REALES
     controls = []
     for description, active in raw_status.items():
         slug = MAPPING_KEYS.get(description, "unknown")
@@ -155,22 +148,18 @@ async def read_dashboard(
     # --- 2. Lógica de Interfaz Dinámica para PostgreSQL ---
     db_controls = []
     error_db = None
-    
-    # Flag para que tu HTML sepa si debe mostrar el formulario de login o los resultados
     necesita_credenciales = True 
 
-    # Evaluamos si el administrador ya envió el formulario gráfico con datos
+    # Evalúa si el usuario envió el formulario con la clave de BD
     if db_user and db_name and db_password:
         necesita_credenciales = False
         db_host = os.environ.get("MARANDU_DB_HOST", "127.0.0.1")
         db_port = os.environ.get("MARANDU_DB_PORT", "5432")
         
         try:
-            # Ejecuta la auditoría únicamente si se ingresaron las credenciales desde la web
             raw_db_status = get_db_hardening_status_dict(
                 host=db_host, port=db_port, user=db_user, dbname=db_name, password=db_password
             )
-            
             for description, active in raw_db_status.items():
                 slug = DB_MAPPING_KEYS.get(description, "unknown")
                 db_controls.append({
@@ -180,7 +169,6 @@ async def read_dashboard(
                     "active": active
                 })
         except Exception as e:
-            # Si las credenciales fallan o no conecta, volvemos a pedir datos mostrando el error
             necesita_credenciales = True
             error_db = f"Fallo de conexión a PostgreSQL: {str(e)}"
 
@@ -190,9 +178,9 @@ async def read_dashboard(
         context={
             "controls": controls,
             "db_controls": db_controls,
-            "db_user": db_user or "postgres",   # Para rellenar el input del HTML por comodidad
-            "db_name": db_name or "postgres",   # Para rellenar el input del HTML por comodidad
-            "necesita_credenciales": necesita_credenciales, # <-- Variable clave para tu template Jinja
+            "db_user": db_user or "postgres",
+            "db_name": db_name or "postgres",
+            "necesita_credenciales": necesita_credenciales,
             "error_db": error_db,
             "csrf_token": get_csrf_token(request),
             "user": user,
@@ -208,7 +196,6 @@ async def apply_hardening(control_id: str, request: Request, user: str = Depends
     req_db_user = "postgres"
     req_db_name = "postgres"
     
-    # Si la petición es DB, capturamos el JSON dinámico enviado por el cliente
     if request.headers.get("content-type") == "application/json":
         try:
             body = await request.json()
@@ -226,17 +213,9 @@ async def apply_hardening(control_id: str, request: Request, user: str = Depends
                 detail="Falta configurar MARANDU_DB_APP_PASSWORD en el archivo .env web."
             )
         
-        # Invocación recursiva delegando los flags dinámicos de administración -u y -d
         cmd = ["sudo", "python3", DB_AUTH_SCRIPT, "-p", app_db_password, "-u", req_db_user, "-d", req_db_name]
-        
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=120,
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
             return {
                 "status": "success", 
                 "message": f"Hardening general aplicado exitosamente en DB '{req_db_name}' con usuario admin '{req_db_user}'.", 

@@ -32,7 +32,7 @@
             </div>
         </header>
 
-        <!-- SECCIÓN 1: CONTROLES DEL SISTEMA OPERATIVO -->
+        <!-- SECCIÓN 1: CONTROLES DEL SISTEMA OPERATIVO (10 Puntos CIS) -->
         <h2 class="text-xl font-bold text-slate-300 mb-4 tracking-tight">1. Hardening de Sistema Operativo</h2>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
             {% for control in controls %}
@@ -111,7 +111,7 @@
         </div>
 
         {% else %}
-        <!-- PANEL DE ESTADO Y GRILLA DE CONTROLES DE DB -->
+        <!-- PANEL DE ESTADO Y GRILLA DE CONTROLES DE DB (SE MUESTRA TRAS DAR CREDENCIALES) -->
         <div
             class="bg-slate-800 border border-slate-700 rounded-xl p-5 mb-6 shadow-lg flex flex-col sm:flex-row justify-between sm:items-center gap-4">
             <div>
@@ -121,25 +121,25 @@
                         class="text-blue-400 font-mono">{{ db_user }}</code> en la base <code
                         class="text-blue-400 font-mono">{{ db_name }}</code>.</p>
             </div>
-            <!-- Inputs ocultos para preservar los parámetros en las acciones del script sin perder los datos -->
+            <!-- Inputs ocultos para preservar los parámetros al enviar peticiones JS -->
             <input id="db_user_input" type="hidden" value="{{ db_user }}">
             <input id="db_name_input" type="hidden" value="{{ db_name }}">
 
             <a href="/dashboard"
-                class="text-center bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-mono px-4 py-2 rounded-lg border border-slate-600 transition-all">
-                Desconectarse de la DB
+                class="text-center bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-mono px-4 py-2 rounded-lg border border-slate-600 transition-all cursor-pointer">
+                Desconectar / Cambiar Credenciales
             </a>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {% for db_control in db_controls %}
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
+            {% for control in db_controls %}
             <div
                 class="bg-slate-800 border border-slate-700 rounded-xl p-5 flex flex-col justify-between shadow-lg transition-all hover:border-slate-600">
                 <div>
                     <div class="flex justify-between items-start mb-3">
                         <span class="text-xs font-mono tracking-wider text-slate-400 uppercase">DB Control {{ loop.index
                             }}</span>
-                        {% if db_control.active %}
+                        {% if control.active %}
                         <span
                             class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full">Cumple
                             (CIS)</span>
@@ -148,87 +148,70 @@
                             class="bg-rose-500/10 text-rose-400 border border-rose-500/30 text-xs font-semibold px-2.5 py-0.5 rounded-full animate-pulse">Vulnerable</span>
                         {% endif %}
                     </div>
-                    <h3 class="text-lg font-medium text-slate-200">{{ db_control.description }}</h3>
+                    <h3 class="text-lg font-medium text-slate-200">{{ control.description }}</h3>
                 </div>
                 <div class="mt-6 flex items-center justify-between gap-4 pt-4 border-t border-slate-700/50">
-                    <span class="text-xs text-slate-400 font-mono">id: {{ db_control.id }}</span>
-                    <button onclick="applyHardening('{{ db_control.id }}', this)"
+                    <span class="text-xs text-slate-400 font-mono">id: {{ control.id }}</span>
+                    <button onclick="applyHardening('{{ control.id }}', this)"
                         class="px-4 py-2 text-xs font-semibold rounded-lg border transition-all cursor-pointer
-                        {% if db_control.active %} bg-slate-700 text-slate-400 border-slate-600 cursor-not-allowed opacity-60 {% else %} bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-900/20 {% endif %}"
-                        {% if db_control.active %} disabled {% endif %}>
-                        {% if db_control.active %} Hardened {% else %} Aplicar Medida {% endif %}
+                        {% if control.active %} bg-slate-700 text-slate-400 border-slate-600 cursor-not-allowed opacity-60 {% else %} bg-blue-600 hover:bg-blue-500 text-white border-blue-500 shadow-md shadow-blue-900/20 {% endif %}"
+                        {% if control.active %} disabled {% endif %}>
+                        {% if control.active %} Hardened {% else %} Aplicar Medida DB {% endif %}
                     </button>
                 </div>
             </div>
             {% endfor %}
         </div>
         {% endif %}
+
     </div>
 
+    <!-- JAVASCRIPT PARA EJECUTAR LAS ACCIONES DE HARDENING EN CALIENTE -->
     <script>
-        const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]').content;
+        async function applyHardening(controlId, buttonElem) {
+            const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
 
-        // Extrae la contraseña dinámicamente de la URL si ya estamos autenticados en el Dashboard
-        function getDbPasswordFromUrl() {
-            const params = new URLSearchParams(window.location.search);
-            return params.get('db_password') || '';
-        }
+            // Si hay sesión de BD abierta, capturamos los parámetros
+            const dbUserElem = document.getElementById('db_user_input');
+            const dbNameElem = document.getElementById('db_name_input');
 
-        // Refresca la vista conservando usuario y base de datos
-        function refreshAuditWithWebParams() {
-            const dbUser = document.getElementById('db_user_input').value;
-            const dbName = document.getElementById('db_name_input').value;
-            const dbPass = getDbPasswordFromUrl();
-            window.location.href = `/dashboard?db_user=${encodeURIComponent(dbUser)}&db_name=${encodeURIComponent(dbName)}&db_password=${encodeURIComponent(dbPass)}`;
-        }
+            const payload = {
+                db_user: dbUserElem ? dbUserElem.value : "postgres",
+                db_name: dbNameElem ? dbNameElem.value : "postgres"
+            };
 
-        async function applyHardening(controlId, buttonElement) {
-            if (!confirm(`¿Estás seguro de que deseas aplicar el hardening para: ${controlId}?`)) return;
-
-            const originalText = buttonElement.innerText;
-            buttonElement.innerText = "Aplicando...";
-            buttonElement.disabled = true;
-            buttonElement.classList.add('opacity-50', 'cursor-wait');
-
-            // Preparar el cuerpo JSON de la solicitud enviando las credenciales dinámicas de la web
-            let payload = {};
-            if (controlId.startsWith('db_')) {
-                payload.db_user = document.getElementById('db_user_input').value;
-                payload.db_name = document.getElementById('db_name_input').value;
-                payload.db_password = getDbPasswordFromUrl(); // Enviamos la contraseña ingresada gráficamente
-            }
+            // Cambiamos el estado del botón mientras procesa
+            const originalText = buttonElem.innerText;
+            buttonElem.innerText = "Aplicando...";
+            buttonElem.disabled = true;
+            buttonElem.classList.add("opacity-50", "cursor-wait");
 
             try {
                 const response = await fetch(`/prevention/apply/${controlId}`, {
-                    method: 'POST',
+                    method: "POST",
                     headers: {
-                        'X-CSRF-Token': CSRF_TOKEN,
-                        'Content-Type': 'application/json'
+                        "Content-Type": "application/json",
+                        "X-CSRF-Token": csrfToken
                     },
                     body: JSON.stringify(payload)
                 });
 
-                if (response.status === 401 || response.status === 303) {
-                    window.location.href = '/login';
-                    return;
-                }
-
                 const data = await response.json();
 
                 if (response.ok) {
-                    alert(`Éxito: ${data.message}`);
-                    refreshAuditWithWebParams();
+                    alert(data.message || "Hardening aplicado con éxito.");
+                    window.location.reload(); // Recargamos para auditar y ver los badges verdes
                 } else {
-                    alert(`Error: ${data.detail}`);
-                    buttonElement.innerText = originalText;
-                    buttonElement.disabled = false;
-                    buttonElement.classList.remove('opacity-50', 'cursor-wait');
+                    alert("Error al aplicar medida: " + (data.detail || "Fallo desconocido"));
+                    buttonElem.innerText = originalText;
+                    buttonElem.disabled = false;
+                    buttonElem.classList.remove("opacity-50", "cursor-wait");
                 }
             } catch (error) {
-                alert("Error de comunicación con el servidor HIPS.");
-                buttonElement.innerText = originalText;
-                buttonElement.disabled = false;
-                buttonElement.classList.remove('opacity-50', 'cursor-wait');
+                alert("Error de red o comunicación con el servidor HIPS.");
+                buttonElem.innerText = originalText;
+                buttonElem.disabled = false;
+                buttonElem.classList.remove("opacity-50", "cursor-wait");
             }
         }
     </script>
