@@ -2,13 +2,32 @@ import os
 import subprocess
 import re
 
-if os.geteuid() != 0:
-    print("Este script debe ejecutarse como root (sudo).")
-    exit(1)
+# NOTA: este módulo ya NO exige que todo el proceso corra como root.
+# Casi todos los chequeos funcionan con un usuario normal. Los dos únicos
+# comandos que realmente necesitan privilegios elevados (`sshd -T` para leer
+# las claves del host, y `auditctl -l` que requiere CAP_AUDIT_CONTROL) se
+# invocan puntualmente con `sudo -n` (no interactivo).
+#
+# Para que funcionen sin pedir contraseña, agregá en /etc/sudoers.d/marandu:
+#
+#   marandu ALL=(root) NOPASSWD: /usr/sbin/sshd -T
+#   marandu ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
+#
+# (ajustá las rutas absolutas de sshd/auditctl según tu distro: `which sshd`,
+# `which auditctl`). Si no configurás esto, esos dos chequeos van a devolver
+# `False` (se van a ver como "Vulnerable") en vez de fallar o colgarse, porque
+# `sudo -n` corta al toque si no puede autenticar sin contraseña.
+
+
+def _run_sudo(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """Corre un comando puntual con sudo no-interactivo (no pide contraseña,
+    y si no está autorizado en sudoers falla rápido en vez de colgarse)."""
+    return subprocess.run(["sudo", "-n", *cmd], capture_output=True, text=True, **kwargs)
+
 
 def verify_ssh_hardening():
     try:
-        result = subprocess.run(["sshd", "-T"], capture_output=True, text=True, check=True)
+        result = _run_sudo(["sshd", "-T"], check=True)
         output = result.stdout.lower()
         root_disabled = "permitrootlogin no" in output
         custom_port = "port 2222" in output
@@ -95,7 +114,7 @@ def verify_auditd_rules():
         status_check = subprocess.run(["systemctl", "is-active", "auditd"], capture_output=True, text=True)
         if status_check.stdout.strip() != "active":
             return False
-        rules_check = subprocess.run(["auditctl", "-l"], capture_output=True, text=True)
+        rules_check = _run_sudo(["auditctl", "-l"])
         output = rules_check.stdout
         return any(x in output for x in ["/etc/passwd", "/etc/shadow", "/etc/sudoers"])
     except Exception:
