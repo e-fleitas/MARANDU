@@ -8,3 +8,4 @@ python-dotenv
 psutil
 asyncpg
 psycopg2-binary
+sqlalchemy

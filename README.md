@@ -1,91 +1,96 @@
 # M.A.R.A.N.D.U.
 ### Malicious Attack Response, Analysis, and Network Detection Unit
 
-A Host-based Intrusion Prevention System (HIPS) developed as Practical
-Assignment #2 for the **Operating Systems 2** course.
+Un Sistema de Prevención de Intrusiones basado en Host (HIPS) desarrollado
+como Trabajo Práctico N.º 2 para la materia **Sistemas Operativos 2**.
 
-The system runs on **Rocky Linux 9** and integrates detection modules,
-automated prevention (live and persistent hardening), and a login-protected
-web dashboard that audits and remediates both the operating system and a
-PostgreSQL database.
-
----
-
-## 🎯 System Objectives
-
-- Detect and respond to host-level threats (suspicious sessions,
-  high-resource processes, and — in progress — file integrity, sniffers,
-  brute force, DDoS, malicious cron entries, etc.)
-- Log every alarm to `/var/log/hips/` in JSON-lines format
-- Centralize system logs via rsyslog to a remote server, with weekly
-  rotation (logrotate) to prevent disk-exhaustion DoS
-- Provide a login-protected web interface (bcrypt + session cookies) to
-  audit and apply remediations with a single click
-- Apply 10 CIS hardening controls on Rocky Linux and 7 on PostgreSQL,
-  verifiable live from the dashboard
+El sistema corre sobre **Rocky Linux 9** e integra módulos de detección,
+prevención automatizada (hardening en caliente y persistente), y un
+dashboard web protegido por login que audita y remedia tanto el sistema
+operativo como una base de datos PostgreSQL.
 
 ---
 
-## 👥 Team Members
+## 🎯 Objetivos del sistema
 
-| Name                 | ID       | Primary Role                         |
+- Detectar y responder a amenazas a nivel host (sesiones sospechosas,
+  procesos con alto consumo de recursos y — en progreso — integridad de
+  archivos, sniffers, fuerza bruta, DDoS, entradas maliciosas en cron, etc.)
+- Registrar cada alarma en `/var/log/hips/` en formato JSON-lines
+- Centralizar los logs del sistema vía rsyslog hacia un servidor remoto,
+  con rotación semanal (logrotate) para prevenir un DoS por agotamiento
+  de disco
+- Ofrecer una interfaz web protegida por login (bcrypt + cookies de
+  sesión), con las credenciales almacenadas en PostgreSQL en lugar de en
+  variables de entorno, para auditar y aplicar remediaciones con un solo clic
+- Aplicar 10 controles de hardening CIS en Rocky Linux y 7 en PostgreSQL,
+  verificables en vivo desde el dashboard
+
+---
+
+## 👥 Integrantes del equipo
+
+| Nombre               | Legajo   | Rol principal                        |
 |----------------------|----------|--------------------------------------|
-| [Member 1]           | XXXXXX   | Detection modules + Database         |
-| [Member 2]           | XXXXXX   | Web interface + Prevention module    |
+| [Integrante 1]       | XXXXXX   | Módulos de detección + Base de datos |
+| [Integrante 2]       | XXXXXX   | Interfaz web + Módulo de prevención  |
 
 ---
 
-## 🛠️ Technology Stack
+## 🛠️ Stack tecnológico
 
-| Component           | Technology                               | Justification                                                   |
-|-----------------------|--------------------------------------------|---------------------------------------------------------------------|
-| Main language        | Python 3.x                                 | Full ecosystem for syscalls, log parsing, and OS scripting        |
-| Web framework         | FastAPI + Jinja2 + Uvicorn                 | Native async, automatic validation, built-in Swagger docs         |
-| Database              | PostgreSQL 16                              | Mandatory course requirement                                      |
-| DB connector          | SQLAlchemy (async, `asyncpg`) / psql       | Standard ORM with async support + `psql`-based auditing checkers   |
-| OS interaction        | `subprocess`, `psutil`, `os`               | Direct access to processes, network, PAM, SELinux, and firewalld  |
-| Web authentication    | `bcrypt` + `SessionMiddleware` (Starlette) | Secure admin password hashing + signed session cookies             |
-| Alerting              | JSON-lines under `/var/log/hips/` (local fallback); `alerts/logger.py` and `alerts/mailer.py` in progress | Persists alarms with no external dependencies while the central logger and email delivery are being integrated |
-| OS Hardening          | SELinux, firewalld, auditd, authselect, SSH, sysctl | CIS Benchmark for Rocky Linux                                     |
-| DB Hardening          | CIS PostgreSQL Benchmark (7 controls)     | Data layer security                                                |
+| Componente             | Tecnología                                  | Justificación                                                        |
+|-------------------------|----------------------------------------------|---------------------------------------------------------------------|
+| Lenguaje principal      | Python 3.x                                   | Ecosistema completo para syscalls, parseo de logs y scripting de OS  |
+| Framework web           | FastAPI + Jinja2 + Uvicorn                   | Async nativo, validación automática, documentación Swagger incluida |
+| Base de datos           | PostgreSQL 16                                | Requisito obligatorio de la materia                                  |
+| Conector de DB          | SQLAlchemy (async, `asyncpg`) / psql         | ORM estándar con soporte async + verificadores de auditoría vía `psql` |
+| Autenticación web       | `bcrypt` + `SessionMiddleware` (Starlette) + PostgreSQL (tabla `usuarios_web`) | Contraseñas hasheadas con bcrypt, cookies de sesión firmadas, usuarios almacenados en la base de datos en lugar de en el `.env` |
+| Alertas                 | JSON-lines bajo `/var/log/hips/` (fallback local); `alerts/logger.py` y `alerts/mailer.py` en progreso | Persiste alarmas sin dependencias externas mientras se integran el logger central y el envío de mails |
+| Hardening de OS         | SELinux, firewalld, auditd, authselect, SSH, sysctl | CIS Benchmark para Rocky Linux                                       |
+| Hardening de DB         | CIS PostgreSQL Benchmark (7 controles)      | Seguridad de la capa de datos                                        |
 
 ---
 
-## 📁 Project Structure
+## 📁 Estructura del proyecto
 
 ```
 MARANDU/
-├── detection/              # Detection modules i–x
-├── prevention/              # Automated prevention actions (hardening)
-├── alerts/                  # Central logger and email notifications (in progress)
-├── web/                      # FastAPI app + templates
-│   ├── app.py                # Routes: login, dashboard, apply hardening
-│   ├── auth.py
+├── detection/              # Módulos de detección i–x
+├── prevention/              # Acciones de prevención automatizadas (hardening)
+├── alerts/                  # Logger central y notificaciones por email (en progreso)
+├── web/                      # App FastAPI + templates
+│   ├── app.py                # Rutas: login, dashboard, aplicar hardening
+│   ├── auth.py                # Verificación de credenciales contra la DB, sesiones, CSRF, rate limiting
 │   ├── templates/             # dashboard.html, login.html
 │   └── scripts/
-│       └── generar_hash.py     # Generates the admin's bcrypt hash
-├── db/                       # SQLAlchemy models and async session
+│       ├── crear_usuario_cli.py       # Crea/actualiza usuarios — solo root + secreto maestro
+│       ├── setup_secreto_maestro.py   # Configuración única del secreto maestro (solo root)
+│       ├── migrar_admin_env_a_db.py   # Migración única: admin legado en .env → usuarios_web
+│       └── generar_hash.py            # Helper legado para altas interactivas en DB (ver nota abajo)
+├── db/                       # Modelos de SQLAlchemy y sesión async
 │   ├── models.py               # UsuarioWeb, Alarma, AccionPrevencion, ConfiguracionModulo
-│   └── session.py
-├── tests/                    # Compliance checkers (not pytest unit tests)
-│   ├── hardening_check.py      # Audits the 10 OS controls
-│   └── db_hardening_check.py   # Audits the 7 PostgreSQL controls
-├── setup_env.sh               # Phase 1: system user, sudoers, native dependencies
-├── setup_web.sh                # Phase 2: virtualenv + Python dependencies
-├── .env.example                # Environment variable template
-└── web/requirements.txt        # Python dependencies for the web app
+│   ├── session.py              # Engine async + get_db()
+│   └── migrations/             # Migraciones de Alembic (env.py, versions/)
+├── tests/                    # Verificadores de cumplimiento (no son tests unitarios de pytest)
+│   ├── hardening_check.py      # Audita los 10 controles de OS
+│   └── db_hardening_check.py   # Audita los 7 controles de PostgreSQL
+├── setup_env.sh               # Fase 1: usuario del sistema, sudoers, dependencias nativas
+├── setup_web.sh                # Fase 2: virtualenv + dependencias de Python
+├── .env.example                # Plantilla de variables de entorno
+└── web/requirements.txt        # Dependencias de Python de la app web
 ```
 
 ---
 
-## ⚙️ Installation (Rocky Linux 9)
+## ⚙️ Instalación (Rocky Linux 9)
 
-Installation happens in two phases via the scripts included at the project
-root. **Running the app directly as root is discouraged**: the setup script
-creates an isolated system user (`marandu`) with `sudo` permissions scoped
-exclusively to the hardening scripts.
+La instalación se hace en dos fases mediante los scripts incluidos en la
+raíz del proyecto. **No se recomienda correr la app directamente como
+root**: el script de setup crea un usuario de sistema aislado (`marandu`)
+con permisos de `sudo` acotados exclusivamente a los scripts de hardening.
 
-### Phase 1 — System environment (as root)
+### Fase 1 — Entorno del sistema (como root)
 
 ```bash
 git clone https://github.com/usuario/MARANDU.git
@@ -94,167 +99,261 @@ cd MARANDU
 sudo ./setup_env.sh
 ```
 
-This script:
-- Installs native dependencies (`python3`, `pgaudit_16`, `openssh-server`, `audit`)
-- Creates the restricted system user `marandu`
-- Configures `/etc/sudoers.d/marandu` with granular `NOPASSWD` rules,
-  scoped exclusively to the scripts under `prevention/` and `tests/`
-- Grants ownership of the project directory to the `marandu` user
+Este script:
+- Instala dependencias nativas (`python3`, `pgaudit_16`, `openssh-server`, `audit`)
+- Crea el usuario de sistema restringido `marandu`
+- Configura `/etc/sudoers.d/marandu` con reglas `NOPASSWD` granulares,
+  acotadas exclusivamente a los scripts bajo `prevention/` y `tests/`
+- Otorga la propiedad del directorio del proyecto al usuario `marandu`
 
-### Phase 2 — Web environment (as the `marandu` user)
+### Fase 2 — Entorno web (como usuario `marandu`)
 
 ```bash
 sudo -u marandu ./setup_web.sh
 ```
 
-This script creates the virtual environment (`venv`) and installs the
-dependencies listed in `web/requirements.txt` (falling back to `fastapi`,
-`uvicorn`, and `pydantic` if that file doesn't exist yet).
+Este script crea el entorno virtual (`venv`) e instala las dependencias
+listadas en `web/requirements.txt` (usando `fastapi`, `uvicorn` y
+`pydantic` como fallback si ese archivo todavía no existe).
 
-### Additional OS requirements
+### Requisitos adicionales del sistema operativo
 
-If you'd rather install dependencies manually (e.g. in an environment where
-`setup_env.sh` can't run), make sure you have:
+Si preferís instalar las dependencias a mano (por ejemplo, en un entorno
+donde `setup_env.sh` no se pueda correr), asegurate de tener:
 
 ```bash
 sudo dnf install -y policycoreutils-python-utils audit audit-rules firewalld rsyslog openssl python3-devel gcc authselect pgaudit_16 acl
 ```
 
-### Environment configuration
+### Configuración del entorno
 
 ```bash
 cp .env.example .env
 ```
 
-| Variable                          | Description                                                                    |
-|-------------------------------------|------------------------------------------------------------------------------------|
-| `MARANDU_SECRET_KEY`               | Session cookie signing key. Generate with `python -c "import secrets; print(secrets.token_hex(32))"` |
-| `MARANDU_ADMIN_USER`               | Dashboard admin username (default: `admin`)                                     |
-| `MARANDU_ADMIN_PASSWORD_HASH`      | bcrypt hash of the admin password. Generate with `python web/scripts/generar_hash.py` |
-| `MARANDU_COOKIE_SECURE`            | `true` in production with HTTPS; `false` only for local development over HTTP    |
-| `MARANDU_DB_HOST` / `MARANDU_DB_PORT` | PostgreSQL host and port used for DB audits (default `127.0.0.1:5432`)        |
-| `MARANDU_DB_APP_PASSWORD`          | Password to assign to the `marandu_app` role when applying DB hardening from the dashboard |
+| Variable                              | Descripción                                                                       |
+|-----------------------------------------|---------------------------------------------------------------------------------------|
+| `MARANDU_SECRET_KEY`                  | Clave de firma de la cookie de sesión. Generar con `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `MARANDU_COOKIE_SECURE`               | `true` en producción con HTTPS; `false` solo para desarrollo local sobre HTTP        |
+| `DATABASE_URL`                        | Cadena de conexión async de SQLAlchemy, ej. `postgresql+asyncpg://marandu_app:<password>@127.0.0.1:5432/marandu_dev` |
+| `MARANDU_DB_HOST` / `MARANDU_DB_PORT` | Host y puerto de PostgreSQL usados para las auditorías de DB (default `127.0.0.1:5432`) |
+| `MARANDU_DB_APP_PASSWORD`             | Contraseña a asignar al rol `marandu_app` al aplicar el hardening de DB desde el dashboard |
 
-> Never generate the admin password hash by hand: always use
-> `python web/scripts/generar_hash.py`, which validates the minimum length
-> and safely truncates to the 72 bytes bcrypt supports.
+> **Las credenciales del dashboard ya no se guardan en el `.env`.** Las
+> variables `MARANDU_ADMIN_USER` / `MARANDU_ADMIN_PASSWORD_HASH` de
+> versiones anteriores fueron retiradas: los usuarios ahora viven en la
+> tabla `usuarios_web` de PostgreSQL. Ver **"Gestión de usuarios del
+> dashboard"** más abajo para saber cómo crear el primer admin y usuarios
+> adicionales.
 
-### Running the web server
+### Levantar el servidor web
 
 ```bash
 source venv/bin/activate
+alembic -c db/alembic.ini upgrade head    # aplica las migraciones, incl. usuarios_web
 uvicorn web.app:app --host 0.0.0.0 --port 8000
 ```
 
-The dashboard is then available at `http://<host>:8000/login`.
+El dashboard queda disponible en `http://<host>:8000/login`.
 
 ---
 
-## 🔒 Operating System Hardening (10 CIS controls)
+## 🔐 Gestión de usuarios del dashboard
 
-Every control can be audited and applied from the web dashboard (one button
-per control) or manually via its individual script.
+Los logins del dashboard se validan contra la tabla `usuarios_web`
+(`db/models.py`) en lugar del archivo `.env`. Las contraseñas se hashean
+con `bcrypt` antes de guardarse, y nunca se manejan en texto plano fuera
+del momento en que se tipean.
 
-| # | Control                                                | Applying script                            | Detail                                                                     |
-|---|-----------------------------------------------------------|-----------------------------------------------|---------------------------------------------------------------------------------|
-| 1 | SSH Hardening (root + port + key)                          | `prevention/ssh_hardening.py`                | Port `2222`, `PermitRootLogin no`, `PasswordAuthentication no`, SELinux port context + firewalld rule for the new port |
-| 2 | Centralized rsyslog                                         | `prevention/rsyslog_centralization.py`       | Local retention in `/var/log/hips/syslog.log` + remote forwarding, weekly `logrotate` (4 rotations, compressed) |
-| 3 | Login banner                                                 | `prevention/banner.py`                       | Configures `/etc/motd` and/or `/etc/issue`                                       |
-| 4 | SELinux in Enforcing mode                                     | `prevention/selinux.py`                      | Applies `setenforce 1` live and persists `SELINUX=enforcing` in `/etc/selinux/config` |
-| 5 | firewalld in a restrictive zone                                | `prevention/firewall.py`                     | Sets the default zone to `drop`, auto-detects the primary interface, and opens only `8000/tcp` (dashboard) and `2222/tcp` (SSH) |
-| 6 | pam_faillock (lockout on failed attempts)                       | `prevention/pam_faillock.py`                 | Enables the `with-faillock` feature via `authselect`                             |
-| 7 | Secure network sysctl parameters                                | `prevention/sysctl.py`                       | `ip_forward=0`, `accept_source_route=0`, `accept_redirects=0`, `secure_redirects=0`, `icmp_echo_ignore_broadcasts=1`, `rp_filter=1` (all/default) in `/etc/sysctl.d/99-sysctl.conf` |
-| 8 | auditd — audit rules                                             | `prevention/auditd.py`                       | Watches `/etc/passwd`, `/etc/shadow`, and `/etc/sudoers` (`identity`/`actions`)  |
-| 9 | Password policy (PAM pwquality)                                  | `prevention/password_hardening.py`           | `minlen=14`, `minclass=4`, `retry=3` in `/etc/security/pwquality.conf`, enabled via `authselect` |
-| 10| `/tmp` mounted with `noexec`/`nosuid`/`nodev`                    | `prevention/secure_tmp_mount.py`             | Overrides `tmp.mount` under `/etc/systemd/system/` and remounts live             |
+**Por diseño, no existe forma de crear un usuario desde la interfaz web.**
+Exponer la creación de usuarios como un endpoint web pondría la operación
+más sensible del sistema detrás de la misma superficie de ataque que todo
+lo demás (CSRF, secuestro de sesión, un bug de autorización, etc.). En su
+lugar, crear un usuario requiere **ambas** cosas:
 
-### Compliance verification (OS)
+1. **Acceso root al servidor** (algo que tenés), y
+2. **Una frase secreta maestra** (algo que sabés), verificada contra un
+   hash bcrypt guardado en `/etc/marandu/create_user.secret` (permisos
+   `600`, dueño `root`).
+
+Ninguno de los dos factores alcanza por sí solo para crear un usuario.
+
+### Configuración única: definir el secreto maestro
+
+```bash
+sudo python3 web/scripts/setup_secreto_maestro.py
+```
+
+Pide una frase secreta (recomendado: 20+ caracteres aleatorios o varias
+palabras al azar) y guarda únicamente su hash bcrypt. La frase en texto
+plano nunca se persiste en ningún lado — guardala en un gestor de
+contraseñas.
+
+### Crear o actualizar un usuario
+
+```bash
+sudo python3 web/scripts/crear_usuario_cli.py
+```
+
+Este script:
+- Se niega a correr si no se invoca como root (`euid == 0`)
+- Se niega a correr si `/etc/marandu/create_user.secret` tiene permisos
+  demasiado abiertos
+- Pide el secreto maestro (input oculto, 3 intentos con demora entre
+  cada uno)
+- Pide usuario, contraseña (con confirmación) y rol, **nunca** como
+  argumentos de línea de comandos, para que nada sensible quede expuesto
+  en `ps aux` ni en el historial de la shell
+- Inserta o actualiza la fila en `usuarios_web`
+- Registra cada intento (éxito o fallo), incluyendo el `$SUDO_USER` que lo
+  invocó, en `/var/log/marandu/creacion_usuarios.log` para trazabilidad
+
+### Migrar el admin legado basado en `.env` (una sola vez)
+
+Los proyectos actualizados desde una versión anterior que usaba
+`MARANDU_ADMIN_USER` / `MARANDU_ADMIN_PASSWORD_HASH` pueden migrar esa
+cuenta a la base de datos una única vez con:
+
+```bash
+python3 web/scripts/migrar_admin_env_a_db.py
+```
+
+Después de confirmar que el login funciona contra la base de datos,
+eliminá `MARANDU_ADMIN_USER` y `MARANDU_ADMIN_PASSWORD_HASH` del `.env` —
+la aplicación ya no las lee.
+
+> `web/scripts/generar_hash.py` se mantiene como un helper más liviano,
+> sin requisito de root, para entornos locales/de desarrollo donde el
+> flujo de root + secreto maestro es una sobrecarga innecesaria. **No debe
+> usarse para gestionar credenciales de producción** — para eso usá
+> `crear_usuario_cli.py`.
+
+---
+
+## 🔒 Hardening del Sistema Operativo (10 controles CIS)
+
+Cada control se puede auditar y aplicar desde el dashboard web (un botón
+por control) o manualmente vía su script individual.
+
+| # | Control                                                       | Script que lo aplica                        | Detalle                                                                          |
+|---|--------------------------------------------------------------------|-------------------------------------------------|---------------------------------------------------------------------------------|
+| 1 | Hardening de SSH (root + puerto + clave)                            | `prevention/ssh_hardening.py`                | Puerto `2222`, `PermitRootLogin no`, `PasswordAuthentication no`, contexto de puerto SELinux + regla de firewalld para el nuevo puerto |
+| 2 | rsyslog centralizado                                                  | `prevention/rsyslog_centralization.py`       | Retención local en `/var/log/hips/syslog.log` + reenvío remoto, `logrotate` semanal (4 rotaciones, comprimido) |
+| 3 | Banner de login                                                        | `prevention/banner.py`                       | Configura `/etc/motd` y/o `/etc/issue`                                            |
+| 4 | SELinux en modo Enforcing                                              | `prevention/selinux.py`                      | Aplica `setenforce 1` en caliente y persiste `SELINUX=enforcing` en `/etc/selinux/config` |
+| 5 | firewalld en zona restrictiva                                          | `prevention/firewall.py`                     | Setea la zona por defecto a `drop`, autodetecta la interfaz primaria, y abre solo `8000/tcp` (dashboard) y `2222/tcp` (SSH) |
+| 6 | pam_faillock (bloqueo por intentos fallidos)                            | `prevention/pam_faillock.py`                 | Habilita la funcionalidad `with-faillock` vía `authselect`                       |
+| 7 | Parámetros sysctl de red seguros                                        | `prevention/sysctl.py`                       | `ip_forward=0`, `accept_source_route=0`, `accept_redirects=0`, `secure_redirects=0`, `icmp_echo_ignore_broadcasts=1`, `rp_filter=1` (all/default) en `/etc/sysctl.d/99-sysctl.conf` |
+| 8 | auditd — reglas de auditoría                                            | `prevention/auditd.py`                       | Vigila `/etc/passwd`, `/etc/shadow` y `/etc/sudoers` (`identity`/`actions`)        |
+| 9 | Política de contraseñas (PAM pwquality)                                  | `prevention/password_hardening.py`           | `minlen=14`, `minclass=4`, `retry=3` en `/etc/security/pwquality.conf`, habilitado vía `authselect` |
+| 10| Montaje de `/tmp` con `noexec`/`nosuid`/`nodev`                          | `prevention/secure_tmp_mount.py`             | Sobreescribe `tmp.mount` bajo `/etc/systemd/system/` y remonta en caliente         |
+
+### Verificación de cumplimiento (OS)
 
 ```bash
 sudo python3 tests/hardening_check.py
 ```
 
-Returns a dict with the status (`true`/`false`) of each of the 10 controls.
-It's also queried automatically whenever `/dashboard` loads.
+Devuelve un diccionario con el estado (`true`/`false`) de cada uno de los
+10 controles. También se consulta automáticamente cada vez que se carga
+`/dashboard`.
 
 ---
 
-## 🔒 Database Hardening (PostgreSQL — 7 CIS controls)
+## 🔒 Hardening de la Base de Datos (PostgreSQL — 7 controles CIS)
 
-### Applying hardening
+### Aplicar el hardening
 
 ```bash
-sudo python3 prevention/db_auth.py -p <MARANDU_APP_PASSWORD> -u postgres -d <YOUR_DB>
+sudo python3 prevention/db_auth.py -p <MARANDU_APP_PASSWORD> -u postgres -d <TU_DB>
 ```
 
-This script:
-- Enables `ssl=on`, `log_connections`/`log_disconnections`, and
-  `password_encryption=scram-sha-256` in `postgresql.auto.conf`
-- Replaces `md5`/`ident` with `scram-sha-256` in `pg_hba.conf`
-- Creates a dedicated `marandu_app` role without `SUPERUSER`/`CREATEDB`/`CREATEROLE`
-- Revokes `PUBLIC` privileges on the `public` schema
-- Installs and enables the `pgaudit` extension (`pgaudit.log = 'all'`)
+Este script:
+- Habilita `ssl=on`, `log_connections`/`log_disconnections`, y
+  `password_encryption=scram-sha-256` en `postgresql.auto.conf`
+- Reemplaza `md5`/`ident` por `scram-sha-256` en `pg_hba.conf`
+- Crea un rol dedicado `marandu_app` sin `SUPERUSER`/`CREATEDB`/`CREATEROLE`
+- Revoca los privilegios de `PUBLIC` sobre el schema `public`
+- Instala y habilita la extensión `pgaudit` (`pgaudit.log = 'all'`)
 
-> From the dashboard, this control can be applied live via
-> `POST /prevention/apply/{control_id}`, provided `MARANDU_DB_APP_PASSWORD`
-> is set in the web app's `.env`.
+> ⚠️ **Nota:** revocar los privilegios de `PUBLIC` sobre el schema
+> `public` también le saca a `marandu_app` sus propios permisos de
+> `CREATE`/`USAGE`, a menos que se vuelvan a otorgar explícitamente
+> después. Tras correr este control (desde la CLI o el dashboard),
+> reotorgá lo que la app necesita en runtime:
+> ```sql
+> GRANT USAGE ON SCHEMA public TO marandu_app;
+> GRANT SELECT, INSERT, UPDATE, DELETE ON usuarios_web, alarmas, configuracion_modulos, eventos_raw, acciones_prevencion TO marandu_app;
+> GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO marandu_app;
+> ```
+> De lo contrario, los logins del dashboard y la escritura de alarmas van
+> a fallar con errores de `InvalidSchemaNameError` / permiso denegado
+> hasta que se restauren los grants.
 
-### Compliance verification (DB)
+> Desde el dashboard, este control se puede aplicar en caliente vía
+> `POST /prevention/apply/{control_id}`, siempre que `MARANDU_DB_APP_PASSWORD`
+> esté seteada en el `.env` de la app web.
+
+### Verificación de cumplimiento (DB)
 
 ```bash
-sudo -u postgres python3 tests/db_hardening_check.py -H 127.0.0.1 -u postgres -d <YOUR_DB> -p <YOUR_PASSWORD>
+sudo -u postgres python3 tests/db_hardening_check.py -H 127.0.0.1 -u postgres -d <TU_DB> -p <TU_PASSWORD>
 ```
 
-| # | Control                                                    |
-|---|----------------------------------------------------------------|
-| 1 | TLS/SSL encryption enabled (`ssl=on`)                            |
-| 2 | `marandu_app` role without superuser                              |
-| 3 | Connection/disconnection audit logging                            |
-| 4 | Restrictive host control (`pg_hba.conf` free of `md5`)             |
-| 5 | Secure hashing algorithm (`scram-sha-256`)                         |
-| 6 | Public privilege restriction on the `public` schema                |
-| 7 | `pgaudit` extension installed and configured                        |
+| # | Control                                                          |
+|---|------------------------------------------------------------------------|
+| 1 | Cifrado TLS/SSL activo (`ssl=on`)                                        |
+| 2 | Rol `marandu_app` sin superusuario                                       |
+| 3 | Registro de auditoría de conexión/desconexión                            |
+| 4 | Control restrictivo de hosts (`pg_hba.conf` sin `md5`)                     |
+| 5 | Algoritmo de hashing seguro (`scram-sha-256`)                              |
+| 6 | Restricción de privilegios públicos sobre el schema `public`               |
+| 7 | Extensión `pgaudit` instalada y configurada                                |
 
-If all controls pass, the script prints `[+] COMPLIANCE OK` and exits with
-status code `0`.
-
----
-
-## 🖥️ Web Dashboard
-
-- `GET /login` / `POST /login` — Login against `MARANDU_ADMIN_USER` +
-  `MARANDU_ADMIN_PASSWORD_HASH` (verified with `bcrypt`)
-- `POST /logout` — Clears the session
-- `GET /dashboard` — Live-audits the 10 OS controls; if DB credentials are
-  submitted through the form, it also audits the 7 PostgreSQL controls (DB
-  credentials are **not persisted**, they only travel with the request)
-- `POST /prevention/apply/{control_id}` — Applies the given control
-  (protected by a CSRF token and an authenticated admin session)
+Si todos los controles pasan, el script imprime `[+] COMPLIANCE OK` y
+termina con código de salida `0`.
 
 ---
 
-## 📋 Detection Modules
+## 🖥️ Dashboard Web
 
-| #    | Module                          | File                              | Status                                                   |
-|------|-------------------------------------|---------------------------------------|---------------------------------------------------------------|
-| i    | File integrity                     | `detection/file_integrity.py`         | 🔲 Pending                                                       |
-| ii   | Connected users                    | `detection/users_monitor.py`          | ✅ Implemented — parses `who`, alarms on untrusted origins (trusted IPs/CIDRs configurable via `MRND_TRUSTED_IPS`) |
-| iii  | Sniffers & promiscuous mode        | `detection/sniffer_detect.py`         | 🔲 Pending                                                       |
-| iv   | Log analysis                       | `detection/log_analyzer.py`           | 🔲 Pending                                                       |
-| v    | Mail queue / mass spam             | `detection/mail_queue.py`             | 🔲 Pending                                                       |
-| vi   | High-resource processes            | `detection/process_monitor.py`        | ✅ Implemented — configurable thresholds via `MRND_CPU_THRESHOLD` / `MRND_MEM_THRESHOLD`, with a process whitelist |
-| vii  | Suspicious `/tmp` directory        | `detection/tmp_monitor.py`            | 🔲 Pending                                                       |
-| viii | DDoS attacks                       | `detection/ddos_detect.py`            | 🔲 Pending                                                       |
-| ix   | Suspicious cron files              | `detection/cron_monitor.py`           | 🔲 Pending                                                       |
-| x    | Invalid access attempts            | `detection/access_monitor.py`         | 🔲 Pending                                                       |
-
-The implemented modules (`ii` and `vi`) delegate alarm persistence to
-`alerts/logger.py` (`log_event()`); until that central module is available,
-both automatically fall back to a local writer that appends JSON-lines to
-`/var/log/hips/` (or `./logs/` if root permissions aren't available).
+- `GET /login` / `POST /login` — Login contra la tabla `usuarios_web`
+  (contraseña verificada con `bcrypt`, en tiempo constante
+  independientemente de si el usuario existe), protegido por token CSRF y
+  rate limiting por IP (5 intentos fallidos / bloqueo de 15 min)
+- `POST /logout` — Limpia la sesión
+- `GET /dashboard` — Audita en vivo los 10 controles de OS; si se envían
+  credenciales de DB por el formulario, también audita los 7 controles de
+  PostgreSQL (las credenciales de DB **no se persisten**, solo viajan con
+  el request)
+- `POST /prevention/apply/{control_id}` — Aplica el control indicado
+  (protegido por token CSRF y sesión de admin autenticada)
 
 ---
 
-## 📄 License
+## 📋 Módulos de Detección
 
-Academic project — Operating Systems 2 · 2026
+| #    | Módulo                                | Archivo                              | Estado                                                           |
+|------|-------------------------------------------|---------------------------------------|-------------------------------------------------------------------|
+| i    | Integridad de archivos                    | `detection/file_integrity.py`         | 🔲 Pendiente                                                        |
+| ii   | Usuarios conectados                       | `detection/users_monitor.py`          | ✅ Implementado — parsea `who`, alarma ante orígenes no confiables (IPs/CIDRs confiables configurables vía `MRND_TRUSTED_IPS`) |
+| iii  | Sniffers y modo promiscuo                 | `detection/sniffer_detect.py`         | 🔲 Pendiente                                                        |
+| iv   | Análisis de logs                          | `detection/log_analyzer.py`           | 🔲 Pendiente                                                        |
+| v    | Cola de correo / spam masivo              | `detection/mail_queue.py`             | 🔲 Pendiente                                                        |
+| vi   | Procesos con alto consumo de recursos      | `detection/process_monitor.py`        | ✅ Implementado — umbrales configurables vía `MRND_CPU_THRESHOLD` / `MRND_MEM_THRESHOLD`, con whitelist de procesos |
+| vii  | Directorio `/tmp` sospechoso              | `detection/tmp_monitor.py`            | 🔲 Pendiente                                                        |
+| viii | Ataques DDoS                              | `detection/ddos_detect.py`            | 🔲 Pendiente                                                        |
+| ix   | Archivos cron sospechosos                 | `detection/cron_monitor.py`           | 🔲 Pendiente                                                        |
+| x    | Intentos de acceso inválidos              | `detection/access_monitor.py`         | 🔲 Pendiente                                                        |
+
+Los módulos implementados (`ii` y `vi`) delegan la persistencia de alarmas
+a `alerts/logger.py` (`log_event()`); hasta que ese módulo central esté
+disponible, ambos usan automáticamente como fallback un escritor local que
+agrega líneas JSON a `/var/log/hips/` (o `./logs/` si no hay permisos de
+root disponibles).
+
+---
+
+## 📄 Licencia
+
+Proyecto académico — Sistemas Operativos 2 · 2026

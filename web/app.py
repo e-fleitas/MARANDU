@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, Depends, HTTPException, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
 import psycopg2
 
 # ==============================================================================
@@ -73,11 +74,16 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
 from tests.db_hardening_check import get_db_hardening_status_dict
 from tests.hardening_check import get_hardening_status as get_os_hardening_status
 
+# Sesión de DB (para consultar la tabla usuarios_web en el login)
+from db.session import get_db
+
 # ⚡ Autenticación centralizada real (rate limiting, CSRF por sesión,
-# comparación en tiempo constante). Ya no se reimplementa nada de esto acá.
+# comparación en tiempo constante, usuarios en DB). Ya no se reimplementa
+# nada de esto acá.
 from web.auth import (
     NotAuthenticated,
     verify_credentials,
+    touch_last_login,
     is_locked_out,
     register_failed_attempt,
     clear_attempts,
@@ -137,6 +143,7 @@ async def login(
     username: str = Form(...),
     password: str = Form(...),
     csrf_token: str = Form(...),
+    db: AsyncSession = Depends(get_db),
 ):
     if not verify_csrf(request, csrf_token):
         raise HTTPException(status_code=403, detail="Token CSRF inválido o ausente.")
@@ -147,9 +154,11 @@ async def login(
             detail="Demasiados intentos fallidos. Probá de nuevo en unos minutos.",
         )
 
-    if verify_credentials(username, password):
+    user = await verify_credentials(db, username, password)
+    if user is not None:
         clear_attempts(request)
-        request.session["user"] = username
+        request.session["user"] = user.username
+        await touch_last_login(db, user)
         return RedirectResponse(url="/dashboard", status_code=303)
 
     register_failed_attempt(request)
