@@ -24,15 +24,18 @@ from log_analyzer import (
     VENTANA_MAIL_MASIVO_SEGUNDOS,
     procesar_linea,
     VentanaDeslizante,
+    VentanaUsuariosPorIP,
     VENTANA_FAILED_LOGIN_SEGUNDOS,
+    VENTANA_CREDENTIAL_STUFFING_SEGUNDOS,
     VENTANA_404_SEGUNDOS,
     VENTANA_500_SEGUNDOS,
 )
 
 
 def reproducir_secure_messages(ruta_secure, ruta_messages, conexion_db):
-    print(f"\n=== Reproduciendo {ruta_secure} + {ruta_messages} (FAILED_LOGIN_MULTIPLE) ===")
-    ventana = VentanaDeslizante(VENTANA_FAILED_LOGIN_SEGUNDOS)
+    print(f"\n=== Reproduciendo {ruta_secure} + {ruta_messages} (FAILED_LOGIN_MULTIPLE / CREDENTIAL_STUFFING) ===")
+    ventana_failed_login = VentanaDeslizante(VENTANA_FAILED_LOGIN_SEGUNDOS)
+    ventana_credential_stuffing = VentanaUsuariosPorIP(VENTANA_CREDENTIAL_STUFFING_SEGUNDOS)
     total_alarmas = 0
     total_lineas_matcheadas = 0
 
@@ -47,12 +50,14 @@ def reproducir_secure_messages(ruta_secure, ruta_messages, conexion_db):
                     if evento is None:
                         continue
                     total_lineas_matcheadas += 1
-                    total_alarmas += procesar_linea_secure_messages(evento, ventana, conexion_db, fuente)
+                    total_alarmas += procesar_linea_secure_messages(
+                        evento, ventana_failed_login, ventana_credential_stuffing, conexion_db, fuente
+                    )
         except FileNotFoundError:
             print(f"[-] No se encontró {ruta}", file=sys.stderr)
 
     print(f"[+] Líneas matcheadas (Failed password / auth failure): {total_lineas_matcheadas}")
-    print(f"[+] Alarmas FAILED_LOGIN_MULTIPLE emitidas: {total_alarmas}")
+    print(f"[+] Alarmas FAILED_LOGIN_MULTIPLE + CREDENTIAL_STUFFING emitidas: {total_alarmas}")
     return total_alarmas
 
 

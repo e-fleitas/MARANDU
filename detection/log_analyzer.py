@@ -39,6 +39,9 @@ RUTA_MAILLOG = os.environ.get("MRND_MAILLOG", "/var/log/maillog")
 UMBRAL_FAILED_LOGIN = int(os.environ.get("MRND_UMBRAL_FAILED_LOGIN", "5"))
 VENTANA_FAILED_LOGIN_SEGUNDOS = int(os.environ.get("MRND_VENTANA_FAILED_LOGIN", "600"))  # 10 minutos
 
+UMBRAL_USUARIOS_DISTINTOS = int(os.environ.get("MRND_UMBRAL_USUARIOS_DISTINTOS", "3"))
+VENTANA_CREDENTIAL_STUFFING_SEGUNDOS = int(os.environ.get("MRND_VENTANA_CREDENTIAL_STUFFING", "300"))  # 5 minutos
+
 UMBRAL_SMTP_ATTACK = int(os.environ.get("MRND_UMBRAL_SMTP_ATTACK", "5"))
 
 UMBRAL_MAIL_MASIVO = int(os.environ.get("MRND_UMBRAL_MAIL_MASIVO", "20"))
@@ -171,13 +174,13 @@ def parsear_linea_secure_messages(linea):
 # --------------------------------------------------------------------------
 
 _PATRON_SMTP_ATTACK_NATIVO = re.compile(
-    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+sendmail\[\d+\]:\s+'
+    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+(?:sendmail\[\d+\]|postfix/\w+\[\d+\]):\s+'
     r'\S+:\s+\S+\s+\[(?P<ip>[\d.]+)\](?:\s+\(may be forged\))?:\s+'
     r'possible SMTP attack: command=(?P<comando>\S+), count=(?P<conteo>\d+)'
 )
 
 _PATRON_MAIL_FROM = re.compile(
-    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+sendmail\[\d+\]:\s+'
+    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+(?:sendmail\[\d+\]|postfix/\w+\[\d+\]):\s+'
     r'\S+:\s+from=<(?P<remitente>[^>]+)>'
 )
 
@@ -332,6 +335,43 @@ class VentanaDeslizante:
         return True
 
 
+class VentanaUsuariosPorIP:
+    """
+    Lleva, por IP, la lista de (timestamp, usuario) de intentos de login
+    fallidos dentro de una ventana de tiempo. A diferencia de
+    VentanaDeslizante (que cuenta eventos), esta cuenta USUARIOS DISTINTOS
+    intentados desde la misma IP -- la señal específica de credential
+    stuffing (módulo x): un atacante probando múltiples cuentas desde un
+    mismo origen, en vez de fuerza bruta contra una sola cuenta.
+    """
+
+    def __init__(self, ventana_segundos):
+        self.ventana_segundos = ventana_segundos
+        self._eventos_por_ip = collections.defaultdict(list)
+        self._ips_en_alarma = set()
+
+    def registrar_y_contar_usuarios(self, ip, usuario, timestamp):
+        limite = timestamp - datetime.timedelta(seconds=self.ventana_segundos)
+
+        eventos = self._eventos_por_ip[ip]
+        eventos.append((timestamp, usuario))
+
+        eventos_vigentes = [(t, u) for (t, u) in eventos if t >= limite]
+        self._eventos_por_ip[ip] = eventos_vigentes
+
+        usuarios_distintos = {u for _, u in eventos_vigentes}
+        return len(usuarios_distintos), usuarios_distintos
+
+    def debe_alarmar(self, ip, conteo, umbral):
+        if conteo < umbral:
+            self._ips_en_alarma.discard(ip)
+            return False
+        if ip in self._ips_en_alarma:
+            return False
+        self._ips_en_alarma.add(ip)
+        return True
+
+
 # --------------------------------------------------------------------------
 # Procesamiento de access.log
 # --------------------------------------------------------------------------
@@ -416,11 +456,13 @@ def procesar_linea(evento, ventana_404, ventana_500, conexion_db):
 # Procesamiento de secure/messages y maillog
 # --------------------------------------------------------------------------
 
-def procesar_linea_secure_messages(evento, ventana_failed_login, conexion_db, fuente):
+def procesar_linea_secure_messages(evento, ventana_failed_login, ventana_credential_stuffing, conexion_db, fuente):
     """
     Procesa un evento de Failed password (SSH) o auth failure (SASL).
-    Ambos se tratan igual a nivel de alarma: umbral de intentos fallidos
-    por usuario en una ventana de tiempo, dispara FAILED_LOGIN_MULTIPLE.
+    Dos alarmas posibles:
+    1. FAILED_LOGIN_MULTIPLE: umbral de intentos fallidos por usuario.
+    2. CREDENTIAL_STUFFING (modulo x): usuarios distintos desde la misma IP
+       (solo SSH, que trae IP real -- SASL no expone IP).
     """
     try:
         insertar_evento_raw(
@@ -434,6 +476,8 @@ def procesar_linea_secure_messages(evento, ventana_failed_login, conexion_db, fu
         )
     except Exception as e:
         print(f"[!] Error normalizando evento de {fuente} a eventos_raw: {e}", file=sys.stderr)
+
+    alarmas_emitidas = 0
 
     try:
         conteo = ventana_failed_login.registrar_y_contar(evento["usuario"], evento["timestamp"])
@@ -457,11 +501,39 @@ def procesar_linea_secure_messages(evento, ventana_failed_login, conexion_db, fu
             )
             print(f"[ALARMA] FAILED_LOGIN_MULTIPLE :: usuario={evento['usuario']} "
                   f"ip={evento['ip'] or 'N/A'} conteo={conteo} fuente={fuente}")
-            return 1
+            alarmas_emitidas += 1
     except Exception as e:
         print(f"[-] Error evaluando umbral de failed login para {evento}: {e}", file=sys.stderr)
 
-    return 0
+    if evento["ip"] is not None:
+        try:
+            conteo_usuarios, usuarios_distintos = ventana_credential_stuffing.registrar_y_contar_usuarios(
+                evento["ip"], evento["usuario"], evento["timestamp"]
+            )
+            if ventana_credential_stuffing.debe_alarmar(evento["ip"], conteo_usuarios, UMBRAL_USUARIOS_DISTINTOS):
+                detalle = {
+                    "ip_origen": evento["ip"],
+                    "usuarios_distintos": sorted(usuarios_distintos),
+                    "conteo_usuarios_distintos": conteo_usuarios,
+                    "umbral": UMBRAL_USUARIOS_DISTINTOS,
+                    "ventana_segundos": VENTANA_CREDENTIAL_STUFFING_SEGUNDOS,
+                    "fuente": fuente,
+                }
+                insertar_alarma(
+                    conexion_db,
+                    timestamp=evento["timestamp"],
+                    tipo_alarma="CREDENTIAL_STUFFING",
+                    ip_origen=evento["ip"],
+                    modulo="modulo_x",
+                    detalle=detalle,
+                )
+                print(f"[ALARMA] CREDENTIAL_STUFFING :: ip={evento['ip']} "
+                      f"usuarios={sorted(usuarios_distintos)} conteo={conteo_usuarios}")
+                alarmas_emitidas += 1
+        except Exception as e:
+            print(f"[-] Error evaluando credential stuffing para {evento}: {e}", file=sys.stderr)
+
+    return alarmas_emitidas
 
 
 def procesar_linea_maillog(evento, ventana_mail_masivo, conexion_db):
@@ -566,6 +638,7 @@ def monitorear_todas_las_fuentes(duracion_segundos=None):
     ventana_404 = VentanaDeslizante(VENTANA_404_SEGUNDOS)
     ventana_500 = VentanaDeslizante(VENTANA_500_SEGUNDOS)
     ventana_failed_login = VentanaDeslizante(VENTANA_FAILED_LOGIN_SEGUNDOS)
+    ventana_credential_stuffing = VentanaUsuariosPorIP(VENTANA_CREDENTIAL_STUFFING_SEGUNDOS)
     ventana_mail_masivo = VentanaDeslizante(VENTANA_MAIL_MASIVO_SEGUNDOS)
 
     print(f"[+] Monitoreando access.log ({RUTA_ACCESS_LOG}), secure ({RUTA_SECURE_LOG}), "
@@ -585,14 +658,14 @@ def monitorear_todas_las_fuentes(duracion_segundos=None):
                 evento = parsear_linea_secure_messages(linea)
                 if evento is not None:
                     total_alarmas += procesar_linea_secure_messages(
-                        evento, ventana_failed_login, conexion_db, "secure"
+                        evento, ventana_failed_login, ventana_credential_stuffing, conexion_db, "secure"
                     )
 
             for linea in tail_messages.leer_lineas():
                 evento = parsear_linea_secure_messages(linea)
                 if evento is not None:
                     total_alarmas += procesar_linea_secure_messages(
-                        evento, ventana_failed_login, conexion_db, "messages"
+                        evento, ventana_failed_login, ventana_credential_stuffing, conexion_db, "messages"
                     )
 
             for linea in tail_maillog.leer_lineas():
