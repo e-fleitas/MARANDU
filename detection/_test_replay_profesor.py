@@ -21,6 +21,7 @@ from log_analyzer import (
     parsear_linea_access_log,
     procesar_linea_secure_messages,
     procesar_linea_maillog,
+    VENTANA_MAIL_MASIVO_SEGUNDOS,
     procesar_linea,
     VentanaDeslizante,
     VENTANA_FAILED_LOGIN_SEGUNDOS,
@@ -57,7 +58,7 @@ def reproducir_secure_messages(ruta_secure, ruta_messages, conexion_db):
 
 def reproducir_maillog(ruta_maillog, conexion_db):
     print(f"\n=== Reproduciendo {ruta_maillog} (SMTP_BRUTE_FORCE) ===")
-    conteo_mail_por_remitente = {}
+    ventana_mail_masivo = VentanaDeslizante(VENTANA_MAIL_MASIVO_SEGUNDOS)
     total_alarmas = 0
     total_lineas_matcheadas = 0
     total_ataques_nativos = 0
@@ -77,7 +78,7 @@ def reproducir_maillog(ruta_maillog, conexion_db):
                     total_ataques_nativos += 1
                 else:
                     total_mails += 1
-                total_alarmas += procesar_linea_maillog(evento, conteo_mail_por_remitente, conexion_db)
+                total_alarmas += procesar_linea_maillog(evento, ventana_mail_masivo, conexion_db)
     except FileNotFoundError:
         print(f"[-] No se encontró {ruta_maillog}", file=sys.stderr)
 

@@ -41,6 +41,9 @@ VENTANA_FAILED_LOGIN_SEGUNDOS = int(os.environ.get("MRND_VENTANA_FAILED_LOGIN", 
 
 UMBRAL_SMTP_ATTACK = int(os.environ.get("MRND_UMBRAL_SMTP_ATTACK", "5"))
 
+UMBRAL_MAIL_MASIVO = int(os.environ.get("MRND_UMBRAL_MAIL_MASIVO", "20"))
+VENTANA_MAIL_MASIVO_SEGUNDOS = int(os.environ.get("MRND_VENTANA_MAIL_MASIVO", "300"))  # 5 minutos
+
 UMBRAL_404 = int(os.environ.get("MRND_UMBRAL_404", "50"))
 VENTANA_404_SEGUNDOS = int(os.environ.get("MRND_VENTANA_404", "300"))  # 5 minutos
 
@@ -461,15 +464,15 @@ def procesar_linea_secure_messages(evento, ventana_failed_login, conexion_db, fu
     return 0
 
 
-def procesar_linea_maillog(evento, conteo_mail_por_remitente, conexion_db):
+def procesar_linea_maillog(evento, ventana_mail_masivo, conexion_db):
     """
     Procesa un evento de maillog. Dos casos:
     1. smtp_attack_nativo: Sendmail ya detectó y contó el ataque -- si su
        conteo supera nuestro umbral, generamos la alarma directamente
        (no hace falta ventana deslizante propia, Sendmail ya la hizo).
-    2. mail_enviado: acumulamos por remitente para detectar envío masivo
-       (módulo v, cola de correo) -- se deja preparado, el umbral y la
-       alarma específica de v se completan cuando se aborde ese módulo.
+    2. mail_enviado: ventana deslizante por remitente -- dispara
+       MAIL_QUEUE_ALTA (variante "envío masivo") si supera el umbral
+       configurado (módulo v).
     """
     try:
         insertar_evento_raw(
@@ -507,6 +510,31 @@ def procesar_linea_maillog(evento, conteo_mail_por_remitente, conexion_db):
         except Exception as e:
             print(f"[-] Error evaluando ataque SMTP nativo para {evento}: {e}", file=sys.stderr)
 
+    elif evento["tipo_evento"] == "mail_enviado":
+        try:
+            remitente = evento["remitente"]
+            conteo = ventana_mail_masivo.registrar_y_contar(remitente, evento["timestamp"])
+            if ventana_mail_masivo.debe_alarmar(remitente, conteo, UMBRAL_MAIL_MASIVO):
+                detalle = {
+                    "remitente": remitente,
+                    "conteo_ventana": conteo,
+                    "umbral": UMBRAL_MAIL_MASIVO,
+                    "ventana_segundos": VENTANA_MAIL_MASIVO_SEGUNDOS,
+                    "origen": "envio_masivo_remitente",
+                }
+                insertar_alarma(
+                    conexion_db,
+                    timestamp=evento["timestamp"],
+                    tipo_alarma="MAIL_QUEUE_ALTA",
+                    ip_origen="N/A",
+                    modulo=MODULO_NOMBRE,
+                    detalle=detalle,
+                )
+                print(f"[ALARMA] MAIL_QUEUE_ALTA (envío masivo) :: remitente={remitente} conteo={conteo}")
+                return 1
+        except Exception as e:
+            print(f"[-] Error evaluando envío masivo para {evento}: {e}", file=sys.stderr)
+
     return 0
 
 
@@ -538,7 +566,7 @@ def monitorear_todas_las_fuentes(duracion_segundos=None):
     ventana_404 = VentanaDeslizante(VENTANA_404_SEGUNDOS)
     ventana_500 = VentanaDeslizante(VENTANA_500_SEGUNDOS)
     ventana_failed_login = VentanaDeslizante(VENTANA_FAILED_LOGIN_SEGUNDOS)
-    conteo_mail_por_remitente = collections.defaultdict(list)
+    ventana_mail_masivo = VentanaDeslizante(VENTANA_MAIL_MASIVO_SEGUNDOS)
 
     print(f"[+] Monitoreando access.log ({RUTA_ACCESS_LOG}), secure ({RUTA_SECURE_LOG}), "
           f"messages ({RUTA_MESSAGES_LOG}) y maillog ({RUTA_MAILLOG})...")
@@ -570,7 +598,7 @@ def monitorear_todas_las_fuentes(duracion_segundos=None):
             for linea in tail_maillog.leer_lineas():
                 evento = parsear_linea_maillog(linea)
                 if evento is not None:
-                    total_alarmas += procesar_linea_maillog(evento, conteo_mail_por_remitente, conexion_db)
+                    total_alarmas += procesar_linea_maillog(evento, ventana_mail_masivo, conexion_db)
 
             time.sleep(1.0)
 
