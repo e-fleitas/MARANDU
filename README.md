@@ -181,7 +181,7 @@ Ninguno de los dos factores alcanza por sí solo para crear un usuario.
 ### Configuración única: definir el secreto maestro
 
 ```bash
-sudo python3 web/scripts/setup_secreto_maestro.py
+sudo ./venv/bin/python web/scripts/setup_secreto_maestro.py
 ```
 
 Pide una frase secreta (recomendado: 20+ caracteres aleatorios o varias
@@ -192,7 +192,7 @@ contraseñas.
 ### Crear o actualizar un usuario
 
 ```bash
-sudo python3 web/scripts/crear_usuario_cli.py
+sudo ./venv/bin/python web/scripts/crear_usuario_cli.py
 ```
 
 Este script:

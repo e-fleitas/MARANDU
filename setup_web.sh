@@ -2,6 +2,18 @@
 # ==============================================================================
 # M.A.R.A.N.D.U. - Script de Configuración Web y Entorno Virtual
 # ==============================================================================
+#
+# Además de crear el venv e instalar dependencias, este script deja la base
+# de datos lista: crea las tablas y carga `configuracion_modulos` con los
+# 3 niveles (minimo/moderado/agresivo) de cada grupo de alarma, respetando
+# el piso de seguridad definido en prevention/strategia.py.
+#
+# Opcional: para que también se cargue la configuración de notificaciones
+# SMTP, exportá estas variables antes de correr el script:
+#   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ADMIN_EMAIL
+# Si no están seteadas, el script avisa y podés volver a correr el seed
+# más adelante con: python -m db.seed_config
+# ==============================================================================
 set -e
 
 # Validar de forma estricta que no se esté ejecutando como root accidentalmente
@@ -45,6 +57,16 @@ else
     echo "[+] Instalando dependencias base estándar para el Dashboard (FastAPI/Uvicorn)..."
     pip install fastapi uvicorn pydantic
 fi
+
+# Estas 3 son necesarias para el paso de seed de la BD (punto 4) sin
+# importar si ya vinieron o no en requirements.txt.
+pip install "sqlalchemy[asyncio]" asyncpg python-dotenv
+
+# 4. Preparar la base de datos: crear tablas y cargar configuracion_modulos
+#    (idempotente: se puede correr de nuevo sin duplicar filas ni pisar
+#    niveles ya configurados a mano desde el panel).
+echo "[+] Preparando base de datos (tablas + configuracion_modulos)..."
+python -m db.seed_config
 
 echo "=============================================================================="
 echo "[✓] FASE 2 COMPLETADA: Entorno web de M.A.R.A.N.D.U. listo."

@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -40,9 +40,16 @@ class AccionPrevencion(Base):
 
 class ConfiguracionModulo(Base):
     __tablename__ = "configuracion_modulos"
+    __table_args__ = (
+        # Evita filas duplicadas para el mismo (grupo, nivel/parametro),
+        # que romperían la lógica de "exactamente un activo por grupo" en
+        # strategia.py si se insertaran dos veces por error (ej. corriendo
+        # el seed dos veces sin este constraint, o una carga manual).
+        UniqueConstraint("modulo", "parametro", name="uq_configuracion_modulo_parametro"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    modulo = Column(String, nullable=False)
+    modulo = Column(String, nullable=False, index=True)
     parametro = Column(String, nullable=False)
     valor = Column(String, nullable=False)
     activo = Column(Boolean, default=True)
