@@ -171,13 +171,13 @@ def parsear_linea_secure_messages(linea):
 # --------------------------------------------------------------------------
 
 _PATRON_SMTP_ATTACK_NATIVO = re.compile(
-    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+sendmail\[\d+\]:\s+'
+    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+(?:sendmail\[\d+\]|postfix/\w+\[\d+\]):\s+'
     r'\S+:\s+\S+\s+\[(?P<ip>[\d.]+)\](?:\s+\(may be forged\))?:\s+'
     r'possible SMTP attack: command=(?P<comando>\S+), count=(?P<conteo>\d+)'
 )
 
 _PATRON_MAIL_FROM = re.compile(
-    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+sendmail\[\d+\]:\s+'
+    r'^(?P<mes_dia>\w+\s+\d+)\s+(?P<hora>\d{2}:\d{2}:\d{2})\s+\S+\s+(?:sendmail\[\d+\]|postfix/\w+\[\d+\]):\s+'
     r'\S+:\s+from=<(?P<remitente>[^>]+)>'
 )
 
