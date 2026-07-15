@@ -28,7 +28,18 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", "..", ".env"))
 _db_url = os.environ.get("DATABASE_URL")
 if not _db_url:
-    raise RuntimeError("Falta DATABASE_URL en el .env del proyecto")
+    _db_user = os.environ.get("DB_USER")
+    _db_password = os.environ.get("DB_PASSWORD")
+    _db_name = os.environ.get("DB_NAME")
+    _db_host = os.environ.get("DB_HOST", "127.0.0.1")
+    _db_port = os.environ.get("DB_PORT", "5432")
+    if _db_user and _db_password and _db_name:
+        _db_url = f"postgresql+asyncpg://{_db_user}:{_db_password}@{_db_host}:{_db_port}/{_db_name}"
+if not _db_url:
+    raise RuntimeError(
+        "Falta la configuración de base de datos en el .env del proyecto. "
+        "Definí DATABASE_URL, o bien DB_USER, DB_PASSWORD, DB_NAME."
+    )
 config.set_main_option("sqlalchemy.url", _db_url)
 
 target_metadata = Base.metadata

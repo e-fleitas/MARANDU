@@ -40,20 +40,37 @@ def _ruta_env():
 
 def _cargar_database_url():
     """
-    Lee DATABASE_URL del .env del proyecto y lo convierte al driver síncrono
-    (psycopg2) si viene configurado para el driver async (asyncpg).
+    Lee la URL de conexión del .env del proyecto, con dos convenciones
+    posibles (el equipo usa ambas en distintos lugares):
+
+    1. DATABASE_URL completa (usada por Alembic y originalmente acá).
+    2. Variables separadas (usadas por db/session.py, generadas por
+       setup_env.sh): DB_USER, DB_PASSWORD, DB_NAME, DB_HOST, DB_PORT.
+
+    Si están las dos, gana DATABASE_URL explícita.
     """
     if load_dotenv is not None:
         load_dotenv(_ruta_env())
 
     url = os.environ.get("DATABASE_URL")
+
+    if not url:
+        db_user = os.environ.get("DB_USER")
+        db_password = os.environ.get("DB_PASSWORD")
+        db_name = os.environ.get("DB_NAME")
+        db_host = os.environ.get("DB_HOST", "127.0.0.1")
+        db_port = os.environ.get("DB_PORT", "5432")
+
+        if db_user and db_password and db_name:
+            url = f"postgresql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+
     if not url:
         raise RuntimeError(
-            "Falta DATABASE_URL en el .env del proyecto. "
-            "Revisá que exista la línea DATABASE_URL=postgresql+asyncpg://... en .env"
+            "Falta la configuración de base de datos en el .env del proyecto. "
+            "Definí DATABASE_URL=postgresql+asyncpg://usuario:password@host:puerto/basededatos, "
+            "o bien DB_USER, DB_PASSWORD, DB_NAME (y opcionalmente DB_HOST, DB_PORT)."
         )
 
-    # psycopg2 no entiende el sufijo +asyncpg; lo convertimos al driver síncrono.
     if "+asyncpg" in url:
         url = url.replace("postgresql+asyncpg", "postgresql")
 
