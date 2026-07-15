@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+logs/
+.env
+web/.env
+pruebas_profesor_*.txt
+detection/pruebas_profesor_*.txt

@@ -1,14 +1,13 @@
+#!/usr/bin/env python3
 import os
 import subprocess
 import re
 
-if os.geteuid() != 0:
-    print("Este script debe ejecutarse como root (sudo).")
-    exit(1)
 
 def verify_ssh_hardening():
     try:
-        result = subprocess.run(["sshd", "-T"], capture_output=True, text=True, check=True)
+        # Se añade 'sudo -n' para permitir que el usuario marandu consulte la directiva del sistema
+        result = subprocess.run(["sudo", "-n", "sshd", "-T"], capture_output=True, text=True, check=True)
         output = result.stdout.lower()
         root_disabled = "permitrootlogin no" in output
         custom_port = "port 2222" in output
@@ -80,12 +79,12 @@ def verify_sysctl_network():
             "net.ipv4.conf.all.rp_filter": "1",                 # Mitigación Spoofing / Reverse Path Filter
             "net.ipv4.conf.default.rp_filter": "1"              # Reverse Path Filter (Por defecto)
         }
-        
+
         for param, expected in checks.items():
             res = subprocess.run(["sysctl", "-n", param], capture_output=True, text=True)
             if res.stdout.strip() != expected:
                 return False  # Si uno solo no coincide, la validación de red segura falla
-                
+
         return True
     except Exception:
         return False
@@ -95,7 +94,8 @@ def verify_auditd_rules():
         status_check = subprocess.run(["systemctl", "is-active", "auditd"], capture_output=True, text=True)
         if status_check.stdout.strip() != "active":
             return False
-        rules_check = subprocess.run(["auditctl", "-l"], capture_output=True, text=True)
+        # Se añade 'sudo -n' para permitir listar las reglas del kernel sin privilegios directos de root
+        rules_check = subprocess.run(["sudo", "-n", "auditctl", "-l"], capture_output=True, text=True)
         output = rules_check.stdout
         return any(x in output for x in ["/etc/passwd", "/etc/shadow", "/etc/sudoers"])
     except Exception:
@@ -109,7 +109,24 @@ def verify_pam_pwquality():
         with open(config_path, "r") as f:
             content = f.read()
             has_minlen = re.search(r'^\s*minlen\s*=\s*\d+', content, re.MULTILINE) is not None
-            return has_minlen
+
+        # No alcanza con que pwquality.conf tenga minlen: si pam_pwquality.so
+        # no está efectivamente incluido en el stack PAM activo (por ejemplo
+        # porque la feature "with-pwquality" de authselect no llegó a
+        # habilitarse en el perfil seleccionado), esos valores nunca se
+        # aplican en un login real -- el .conf existe pero nadie lo lee.
+        # Confirmamos que el módulo esté realmente cargado en los archivos
+        # PAM relevantes, igual que ya se hace para pam_faillock.so.
+        module_loaded = False
+        files_to_check = ["/etc/pam.d/system-auth", "/etc/pam.d/password-auth"]
+        for file in files_to_check:
+            if os.path.exists(file):
+                with open(file, "r") as f:
+                    if "pam_pwquality.so" in f.read():
+                        module_loaded = True
+                        break
+
+        return has_minlen and module_loaded
     except Exception:
         return False
 
