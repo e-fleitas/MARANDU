@@ -9,4 +9,3 @@ psutil
 asyncpg
 psycopg2-binary
 sqlalchemy
-db_writer

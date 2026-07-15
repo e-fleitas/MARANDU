@@ -1,3 +1,4 @@
+import datetime
 import os
 import subprocess
 from dotenv import load_dotenv
@@ -6,7 +7,9 @@ from fastapi import FastAPI, Request, Depends, HTTPException, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 import psycopg2
 
 # ==============================================================================
@@ -74,8 +77,56 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
 from tests.db_hardening_check import get_db_hardening_status_dict
 from tests.hardening_check import get_hardening_status as get_os_hardening_status
 
-# Sesión de DB (para consultar la tabla usuarios_web en el login)
+# Sesión de DB (para consultar usuarios_web en el login y alarmas/acciones en el dashboard)
 from db.session import get_db
+from db.models import Alarma, AccionPrevencion
+
+# Nivel de respuesta automática por grupo de alarma (minimo/moderado/agresivo,
+# con piso de seguridad que no se puede bajar desde acá; ver prevention/strategia.py)
+from prevention.strategia import (
+    NIVELES as NIVELES_ESTRATEGIA,
+    PISO_NIVEL,
+    piso_de,
+    obtener_estrategia_activa,
+    activar_estrategia,
+)
+
+# Etiquetas legibles para mostrar en el panel (las claves deben coincidir
+# con las de PISO_NIVEL / ALARM_GRUPO en prevention/strategia.py).
+GRUPO_ESTRATEGIA_LABELS = {
+    "usuario_sospechoso": "Usuario sospechoso",
+    "proceso_alto_consumo": "Proceso de alto consumo",
+    "archivo_tmp_sospechoso": "Archivo sospechoso en /tmp",
+    "web_scan_404": "Escaneo web (404 repetidos)",
+    "web_exploit_500": "Posible exploit web (500)",
+    "failed_login_multiple": "Múltiples logins fallidos",
+    "smtp_brute_force": "Fuerza bruta SMTP",
+    "mail_queue_alta": "Cola de correo alta",
+    "ddos_detectado": "DDoS detectado",
+}
+
+# Mapeo tipo_alarma (tabla `alarmas`) -> grupo de estrategia, para poder
+# contar alarmas pendientes por grupo en /api/estrategias.
+#
+# ⚠️ Esto es un espejo intencional de ALARM_GRUPO en
+# prevention/mitigation_actions.py, NO un import de ese módulo: importarlo
+# acá haría que el proceso web (corriendo como 'marandu', sin privilegios)
+# ejecute el `logging.FileHandler("/var/log/hips/prevencion.log")` que ese
+# módulo abre al cargarse — pensado para correr como root/scheduler, no
+# desde el panel web. Si agregás un grupo de alarma nuevo, actualizá los
+# dos lados (acá y en mitigation_actions.py).
+ALARM_TIPO_TO_GRUPO = {
+    "USUARIO_SOSPECHOSO": "usuario_sospechoso",
+    "PROCESO_ALTO_CONSUMO": "proceso_alto_consumo",
+    "ARCHIVO_TMP_SOSPECHOSO": "archivo_tmp_sospechoso",
+    "WEB_SCAN_404": "web_scan_404",
+    "WEB_EXPLOIT_500": "web_exploit_500",
+    "FAILED_LOGIN_MULTIPLE": "failed_login_multiple",
+    "SMTP_BRUTE_FORCE": "smtp_brute_force",
+    "MAIL_QUEUE_ALTA": "mail_queue_alta",
+    "DDOS_DETECTADO": "ddos_detectado",
+}
+GRUPO_A_TIPO_ALARMA = {grupo: tipo for tipo, grupo in ALARM_TIPO_TO_GRUPO.items()}
 
 # ⚡ Autenticación centralizada real (rate limiting, CSRF por sesión,
 # comparación en tiempo constante, usuarios en DB). Ya no se reimplementa
@@ -272,6 +323,164 @@ async def read_dashboard_with_db(
     if not verify_csrf(request, csrf_token):
         raise HTTPException(status_code=403, detail="Token CSRF inválido o ausente.")
     return _render_dashboard(request, user, db_user, db_name, db_password)
+
+
+# ==============================================================================
+# 6.5 ENDPOINT DE ALARMAS Y ACCIONES DE MITIGACIÓN (solo lectura)
+# ==============================================================================
+def _serializar_alarma(alarma: Alarma, incluir_acciones: bool = False) -> dict:
+    data = {
+        "id": alarma.id,
+        "timestamp": alarma.timestamp.isoformat() if alarma.timestamp else None,
+        "tipo_alarma": alarma.tipo_alarma,
+        "ip_origen": alarma.ip_origen,
+        "modulo": alarma.modulo,
+        "detalle": alarma.detalle,
+    }
+    if incluir_acciones:
+        acciones_ordenadas = sorted(
+            alarma.acciones, key=lambda a: a.timestamp or datetime.datetime.min
+        )
+        data["acciones"] = [
+            {
+                "accion": accion.accion,
+                "resultado": accion.resultado,
+                "timestamp": accion.timestamp.isoformat() if accion.timestamp else None,
+            }
+            for accion in acciones_ordenadas
+        ]
+    return data
+
+
+@app.get("/api/alarmas")
+async def api_alarmas(
+    request: Request,
+    user: str = Depends(login_required),
+    db: AsyncSession = Depends(get_db),
+    limite_resueltas: int = 50,
+    tipo_alarma: str | None = None,
+):
+    """
+    Endpoint de solo lectura (GET, sin CSRF porque no cambia estado) que
+    alimenta la sección de "Alarmas y Mitigaciones" del dashboard:
+      - pendientes: alarmas con resuelta=False (ordenadas más reciente primero).
+      - resueltas: últimas N alarmas con resuelta=True, cada una con sus
+        acciones de prevención asociadas (tabla acciones_prevencion), para
+        mostrar qué se hizo y con qué resultado.
+
+    Si se pasa `tipo_alarma`, filtra ambas listas a ese tipo únicamente
+    (usado por el botón "Ver detalle" de la tabla de niveles de reacción).
+    """
+    stmt_pendientes = select(Alarma).where(Alarma.resuelta.is_(False))
+    if tipo_alarma:
+        stmt_pendientes = stmt_pendientes.where(Alarma.tipo_alarma == tipo_alarma)
+    stmt_pendientes = stmt_pendientes.order_by(Alarma.timestamp.desc())
+    pendientes = (await db.execute(stmt_pendientes)).scalars().all()
+
+    stmt_resueltas = select(Alarma).where(Alarma.resuelta.is_(True))
+    if tipo_alarma:
+        stmt_resueltas = stmt_resueltas.where(Alarma.tipo_alarma == tipo_alarma)
+    stmt_resueltas = (
+        stmt_resueltas
+        .options(selectinload(Alarma.acciones))
+        .order_by(Alarma.timestamp.desc())
+        .limit(max(1, min(limite_resueltas, 200)))
+    )
+    resueltas = (await db.execute(stmt_resueltas)).scalars().all()
+
+    return {
+        "pendientes": [_serializar_alarma(a) for a in pendientes],
+        "resueltas": [_serializar_alarma(a, incluir_acciones=True) for a in resueltas],
+    }
+
+
+@app.get("/api/estrategias")
+async def api_estrategias(
+    request: Request,
+    user: str = Depends(login_required),
+    db: AsyncSession = Depends(get_db),
+):
+    """Estado actual (nivel configurado + piso de seguridad) de cada grupo
+    de alarma, más la cantidad de alarmas pendientes de ese grupo, para
+    poblar la tabla unificada de "Alarmas y Respuesta" del panel."""
+    stmt_conteo = (
+        select(Alarma.tipo_alarma, func.count(Alarma.id))
+        .where(Alarma.resuelta.is_(False))
+        .group_by(Alarma.tipo_alarma)
+    )
+    conteo_por_grupo: dict[str, int] = {}
+    for tipo_alarma, cantidad in (await db.execute(stmt_conteo)).all():
+        grupo_de_tipo = ALARM_TIPO_TO_GRUPO.get(tipo_alarma)
+        if grupo_de_tipo:
+            conteo_por_grupo[grupo_de_tipo] = conteo_por_grupo.get(grupo_de_tipo, 0) + cantidad
+
+    resultado = []
+    for grupo, piso in PISO_NIVEL.items():
+        nivel_actual = await obtener_estrategia_activa(db, grupo)
+        resultado.append({
+            "grupo": grupo,
+            "etiqueta": GRUPO_ESTRATEGIA_LABELS.get(grupo, grupo),
+            "tipo_alarma": GRUPO_A_TIPO_ALARMA.get(grupo),
+            "nivel_actual": nivel_actual,
+            "piso": piso,
+            "niveles": list(NIVELES_ESTRATEGIA),
+            "alarmas_pendientes": conteo_por_grupo.get(grupo, 0),
+        })
+    return {"estrategias": resultado}
+
+
+@app.post("/api/estrategias/{grupo}")
+async def api_cambiar_estrategia(
+    grupo: str,
+    request: Request,
+    user: str = Depends(login_required),
+    db: AsyncSession = Depends(get_db),
+):
+    csrf_header = request.headers.get("X-CSRF-Token", "")
+    if not verify_csrf(request, csrf_header):
+        raise HTTPException(status_code=403, detail="Token CSRF inválido o ausente.")
+
+    if grupo not in PISO_NIVEL:
+        raise HTTPException(status_code=404, detail="Grupo de estrategia desconocido.")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Body inválido: se espera JSON con {'nivel': ...}.")
+
+    nivel = body.get("nivel")
+    if nivel not in NIVELES_ESTRATEGIA:
+        raise HTTPException(status_code=400, detail=f"Nivel inválido: {nivel!r}.")
+
+    # Chequeamos el piso ACÁ, antes de llamar a activar_estrategia, para
+    # poder distinguir el motivo real de un rechazo: activar_estrategia
+    # devuelve False tanto si el nivel pedido está por debajo del piso
+    # como si simplemente no existe la fila (modulo, parametro) en la
+    # tabla (ej. porque nunca se corrió el seed para ese grupo). Sin este
+    # chequeo previo, ambos casos se ven idénticos desde afuera.
+    piso = piso_de(grupo)
+    if NIVELES_ESTRATEGIA.index(nivel) < NIVELES_ESTRATEGIA.index(piso):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{nivel}' está por debajo del piso de seguridad de este grupo "
+                f"('{piso}'). No se puede bajar de ahí."
+            ),
+        )
+
+    exito = await activar_estrategia(db, grupo, nivel)
+    if not exito:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No se pudo activar '{nivel}' para '{grupo}'. Esto normalmente significa "
+                f"que falta la fila correspondiente en 'configuracion_modulos' (la tabla no "
+                f"se sembró para este grupo/nivel). Corré 'python -m db.seed_config' desde "
+                f"el venv y volvé a intentar."
+            ),
+        )
+
+    return {"status": "success", "grupo": grupo, "nivel": nivel}
 
 
 @app.post("/prevention/apply/{control_id}")

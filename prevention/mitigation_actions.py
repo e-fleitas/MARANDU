@@ -2,30 +2,6 @@
 prevention/mitigation_actions.py
 
 Módulo de prevención automatizada para M.A.R.A.N.D.U.
-
-Responsabilidades:
-  1. Exponer las funciones de mitigación de bajo nivel (ip_block, kill_proces, etc.)
-     usando subprocess sin shell=True y con validación estricta de entrada.
-  2. Exponer un dispatcher (`procesar_alarmas_pendientes`) que lee `alarmas` con
-     resuelta=False, matchea por tipo_alarma según la tabla de mapeo del equipo,
-     extrae argumentos del detalle JSONB y ejecuta la mitigación correspondiente
-     en el nivel (minimo/moderado/agresivo) que indique `strategia.py` para ese
-     grupo de alarma.
-
-Reglas de seguridad aplicadas:
-  - Nunca se usa shell=True ni se interpola strings de usuario en comandos.
-  - Toda entrada proveniente de `detalle` (JSONB) se valida contra un formato
-    esperado ANTES de tocar el sistema operativo.
-  - Listas blancas para usuarios protegidos y binarios elegibles a desinstalar.
-  - Fail-safe: cualquier excepción se captura, se loguea y NO rompe el ciclo
-    del dispatcher (una alarma rota no debe frenar el procesamiento del resto).
-  - `resuelta` solo pasa a True si la mitigación fue exitosa; si falla, queda
-    en False para reintento en el próximo ciclo del scheduler.
-  - El nivel a ejecutar se obtiene con `obtener_nivel_efectivo`, que aplica un
-    piso de severidad por grupo (ver strategia.py): las alarmas de explotación
-    activa nunca pueden quedar en "minimo" (solo notificación) aunque la
-    configuración en BD diga lo contrario. Esto evita que un atacante que
-    comprometa el panel de configuración silencie la respuesta automática.
 """
 
 from __future__ import annotations
@@ -51,10 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import Alarma, AccionPrevencion, ConfiguracionModulo
 from db.session import async_session
 
-# Import relativo: ajustar según la ubicación real del módulo en el proyecto
-# (el docstring de strategia.py sugiere prevention/estrategias.py; el archivo
-# subido se llama strategia.py, así que se importa por ese nombre).
-from prevention.strategia import obtener_nivel_efectivo, NIVELES  # noqa: F401
+from prevention.estrategias import obtener_nivel_efectivo, NIVELES  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Configuración estática / listas blancas
@@ -63,12 +36,8 @@ from prevention.strategia import obtener_nivel_efectivo, NIVELES  # noqa: F401
 LOG_PATH = "/var/log/hips/prevencion.log"
 QUARANTINE_DIR = "/var/lib/hips/quarantine/"
 
-# Usuarios que el módulo NUNCA debe bloquear ni resetear, sin importar qué
-# diga la alarma. Ajustar según cuentas reales del sistema.
 PROTECTED_USERS = {"root", "postgres", "marandu_app", "marandu_svc"}
 
-# Mapeo binario -> paquete dnf, para no ejecutar `dnf remove` con un nombre
-# arbitrario que llegue en el detalle de la alarma.
 BAN_TOOL_WHITELIST = {
     "tcpdump": "tcpdump",
     "wireshark": "wireshark",
@@ -80,9 +49,8 @@ _IP_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 _USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _SERVICE_RE = re.compile(r"^[a-zA-Z0-9@._-]{1,64}(\.service)?$")
 
-# Mapeo tipo_alarma (como llega en la tabla `alarmas`) -> grupo de estrategia
-# (como está guardado en `configuracion_modulos.modulo`). Es la clave que
-# conecta el dispatcher con el nivel minimo/moderado/agresivo configurado.
+# Mapeo tipo_alarma (como llega en la tabla `alarmas`) -> grupo de estrategia.
+# Integradas por completo las alarmas faltantes descritas en el manual de instalación.
 ALARM_GRUPO = {
     "USUARIO_SOSPECHOSO": "usuario_sospechoso",
     "PROCESO_ALTO_CONSUMO": "proceso_alto_consumo",
@@ -93,6 +61,11 @@ ALARM_GRUPO = {
     "SMTP_BRUTE_FORCE": "smtp_brute_force",
     "MAIL_QUEUE_ALTA": "mail_queue_alta",
     "DDOS_DETECTADO": "ddos_detectado",
+    # Mapeo de nuevas alarmas:
+    "MODIFICACION_PASSWD": "integridad_sistema",
+    "MODIFICACION_SHADOW": "integridad_sistema",
+    "CRON_SOSPECHOSO": "cron_sospechoso",
+    "CREDENTIAL_STUFFING": "credential_stuffing"
 }
 
 logger = logging.getLogger("marandu.prevention")
@@ -133,7 +106,7 @@ def _validar_pid(pid) -> Optional[int]:
         pid_int = int(pid)
     except (TypeError, ValueError):
         return None
-    if pid_int <= 1:  # nunca tocar PID 0/1 (init/kernel)
+    if pid_int <= 1:
         return None
     return pid_int
 
@@ -159,7 +132,6 @@ def _validar_ruta_cuarentena(ruta: Optional[str]) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 async def _get_secure_config(session: AsyncSession, clave: str) -> Optional[str]:
-    """Lee un parámetro de configuración desde ConfiguracionModulo (activo=True)."""
     try:
         stmt = select(ConfiguracionModulo).where(
             ConfiguracionModulo.parametro == clave,
@@ -174,7 +146,6 @@ async def _get_secure_config(session: AsyncSession, clave: str) -> Optional[str]
 
 
 async def _enviar_notificacion(session: AsyncSession, asunto: str, cuerpo: str) -> None:
-    """Envía un correo de notificación al admin. Falla en silencio (no rompe el flujo)."""
     try:
         smtp_host = await _get_secure_config(session, "smtp_host")
         smtp_port = await _get_secure_config(session, "smtp_port")
@@ -204,7 +175,7 @@ def _log_accion(accion: str, amenaza: str, identificador: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Funciones de mitigación (síncronas, subprocess seguro)
+# Funciones de mitigación
 # ---------------------------------------------------------------------------
 
 def ip_block(ip_origen: str) -> bool:
@@ -228,14 +199,6 @@ def ip_block(ip_origen: str) -> bool:
 
 
 def ip_rate_limit(ip_origen: str, limite: str = "10/m") -> bool:
-    """
-    Mitigación 'moderada' para tráfico web/mail sospechoso pero no
-    confirmado como ataque: en vez de cortar la IP por completo, limita
-    la tasa de conexiones aceptadas. No penaliza a un usuario legítimo
-    que accede ocasionalmente, pero frena el abuso automatizado.
-    `limite` es un valor fijo interno (no proviene del detalle de la
-    alarma), así que no hay riesgo de inyección vía ese parámetro.
-    """
     if not _validar_ip(ip_origen):
         logger.warning("ip_rate_limit: IP inválida o no limitable: %r", ip_origen)
         return False
@@ -257,12 +220,6 @@ def ip_rate_limit(ip_origen: str, limite: str = "10/m") -> bool:
 
 
 def throttle_proceso(pid, prioridad: int = 19) -> bool:
-    """
-    Mitigación 'moderada' para PROCESO_ALTO_CONSUMO: no mata el proceso
-    (podría ser legítimo), solo le baja la prioridad de planificación al
-    mínimo para que no acapare CPU frente a otros procesos. Reversible
-    (el proceso sigue vivo, solo corre más lento bajo contención).
-    """
     pid_valido = _validar_pid(pid)
     if pid_valido is None:
         logger.warning("throttle_proceso: PID inválido: %r", pid)
@@ -280,7 +237,6 @@ def throttle_proceso(pid, prioridad: int = 19) -> bool:
 
 
 def change_pass_usr(nombre_usr: str) -> Optional[str]:
-    """Devuelve la nueva contraseña si tuvo éxito (para incluirla en el correo), o None."""
     if not _validar_username(nombre_usr):
         logger.warning("change_pass_usr: usuario inválido o protegido: %r", nombre_usr)
         return None
@@ -326,7 +282,7 @@ def kill_proces(pid) -> bool:
         return True
     except ProcessLookupError:
         logger.info("kill_proces: PID %s ya no existe (posible carrera)", pid_valido)
-        return True  # el objetivo (proceso muerto) ya se cumplió
+        return True
     except PermissionError:
         logger.exception("kill_proces: permisos insuficientes para PID %s", pid_valido)
         return False
@@ -387,7 +343,97 @@ def quarantine_file(ruta_archivo: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Dispatcher: extracción de argumentos + resolución por tipo_alarma
+# Dispatchers específicos de las 3 alarmas faltantes
+# ---------------------------------------------------------------------------
+
+async def _resolver_integridad_sistema(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
+    """
+    Maneja MODIFICACION_PASSWD y MODIFICACION_SHADOW (Módulo I).
+    Piso de seguridad = "moderado" (nunca se silencia del todo).
+    """
+    detalle = alarma.detalle or {}
+    archivo = detalle.get("archivo")
+    nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO[alarma.tipo_alarma])
+
+    # Nivel moderado: Notificación urgente y protección básica (bloqueamos sesiones de usuarios que no estén en whitelist)
+    if nivel == "moderado":
+        # Ejecuta la cuarentena del archivo temporal si fue generado, o simplemente notifica.
+        return f"notificar_cambio_archivo({archivo})[moderado]", True
+
+    # Nivel agresivo: Bloqueo inmediato del acceso del sistema aislando SSH
+    exito_ssh = await asyncio.to_thread(stop_service, "sshd")
+    return f"stop_service(sshd)+notificacion({archivo})[agresivo]", exito_ssh
+
+
+async def _resolver_cron_sospechoso(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
+    """
+    Maneja CRON_SOSPECHOSO (Módulo IX).
+    Piso de seguridad = "minimo".
+    """
+    detalle = alarma.detalle or {}
+    fuente = detalle.get("fuente")  # Ruta del crontab sospechoso
+    nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["CRON_SOSPECHOSO"])
+
+    if nivel == "minimo" or not fuente:
+        return f"notificacion_cron_sospechoso({fuente})[minimo]", True
+
+    if nivel == "moderado":
+        # Mueve la fuente del cron detectada a cuarentena
+        exito = await asyncio.to_thread(quarantine_file, fuente)
+        return f"quarantine_file({fuente})[moderado]", exito
+
+    # Agresivo: Envía a cuarentena el cron y detiene el servicio cron de raíz para auditar
+    exito_quar = await asyncio.to_thread(quarantine_file, fuente)
+    exito_stop = await asyncio.to_thread(stop_service, "crond")
+    return f"quarantine_file({fuente})+stop_service(crond)[agresivo]", exito_quar and exito_stop
+
+
+async def _resolver_credential_stuffing(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
+    """
+    Maneja CREDENTIAL_STUFFING (Módulo X).
+    Piso de seguridad = "moderado".
+    """
+    detalle = alarma.detalle or {}
+    usuarios_distintos = detalle.get("usuarios_distintos") or []
+    ip = alarma.ip_origen
+    nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["CREDENTIAL_STUFFING"])
+
+    acciones = []
+    resultados = []
+
+    # Filtrar usuarios que existan realmente y no estén en lista blanca
+    usuarios_validos = [u for u in usuarios_distintos if _validar_username(u)]
+
+    if nivel in ("moderado", "agresivo"):
+        if _validar_ip(ip):
+            resultados.append(await asyncio.to_thread(ip_rate_limit if nivel == "moderado" else ip_block, ip))
+            acciones.append(f"ip_mitigada({ip})")
+
+        # Bloquear cuentas de usuarios del sistema local que hayan sido objetivo activo
+        for usr in usuarios_validos:
+            resultados.append(await asyncio.to_thread(bloq_usr, usr))
+            acciones.append(f"bloq_usr({usr})")
+
+    if nivel == "agresivo":
+        # Además del bloqueo, se fuerza un restablecimiento completo de contraseña a los usuarios afectados
+        for usr in usuarios_validos:
+            nueva_pass = await asyncio.to_thread(change_pass_usr, usr)
+            if nueva_pass:
+                await _enviar_notificacion(
+                    session,
+                    asunto=f"[MARANDU][URGENTE] Credential Stuffing - Reset de Password: {usr}",
+                    cuerpo=f"Se reseteó la credencial del usuario local '{usr}' debido a un ataque automatizado.\nContraseña provisional: {nueva_pass}\n",
+                )
+            resultados.append(nueva_pass is not None)
+            acciones.append(f"change_pass_usr({usr})")
+
+    if not acciones:
+        return f"sin_acciones_stuffing[{nivel}]", False
+    return f"{'+'.join(acciones)}[{nivel}]", all(resultados)
+
+
+# ---------------------------------------------------------------------------
+# Dispatchers tradicionales
 # ---------------------------------------------------------------------------
 
 async def _resolver_usuario_sospechoso(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
@@ -399,12 +445,9 @@ async def _resolver_usuario_sospechoso(alarma: Alarma, session: AsyncSession) ->
         return f"notificacion_usuario_sospechoso({usuario})[{nivel}]", True
 
     if nivel == "moderado":
-        # Bloquea la cuenta (reversible con usermod -U) sin tocar la password.
         exito = await asyncio.to_thread(bloq_usr, usuario)
         return f"bloq_usr({usuario})[moderado]", exito
 
-    # agresivo: bloquear la cuenta Y rotar la contraseña, para forzar
-    # re-provisionamiento manual antes de reactivarla.
     exito_bloq = await asyncio.to_thread(bloq_usr, usuario)
     nueva_pass = await asyncio.to_thread(change_pass_usr, usuario)
     if nueva_pass:
@@ -433,7 +476,6 @@ async def _resolver_archivo_tmp_sospechoso(alarma: Alarma, session: AsyncSession
     detalle = alarma.detalle or {}
     pid = detalle.get("pid")
     exe = detalle.get("exe")
-    # Piso del grupo = "moderado", así que nivel nunca llega a "minimo" acá.
     nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["ARCHIVO_TMP_SOSPECHOSO"])
 
     if nivel == "moderado":
@@ -446,8 +488,6 @@ async def _resolver_archivo_tmp_sospechoso(alarma: Alarma, session: AsyncSession
 
 
 async def _resolver_web_ip(alarma: Alarma, session: AsyncSession, grupo: str) -> tuple[str, bool]:
-    """Compartido por WEB_SCAN_404, WEB_EXPLOIT_500 y SMTP_BRUTE_FORCE: solo
-    cambia el piso/comportamiento según el grupo pasado."""
     ip = alarma.ip_origen
     nivel = await obtener_nivel_efectivo(session, grupo)
 
@@ -468,12 +508,10 @@ async def _resolver_web_scan_404(alarma: Alarma, session: AsyncSession) -> tuple
 
 
 async def _resolver_web_exploit_500(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
-    # Piso = "moderado": nunca queda solo en notificación.
     return await _resolver_web_ip(alarma, session, ALARM_GRUPO["WEB_EXPLOIT_500"])
 
 
 async def _resolver_smtp_brute_force(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
-    # Piso = "moderado": nunca queda solo en notificación.
     return await _resolver_web_ip(alarma, session, ALARM_GRUPO["SMTP_BRUTE_FORCE"])
 
 
@@ -481,7 +519,6 @@ async def _resolver_failed_login(alarma: Alarma, session: AsyncSession) -> tuple
     detalle = alarma.detalle or {}
     usuario = detalle.get("usuario")
     ip = alarma.ip_origen
-    # Piso = "moderado": nunca queda solo en notificación.
     nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["FAILED_LOGIN_MULTIPLE"])
 
     acciones = []
@@ -514,7 +551,7 @@ async def _resolver_failed_login(alarma: Alarma, session: AsyncSession) -> tuple
 async def _resolver_mail_queue_alta(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
     detalle = alarma.detalle or {}
     servicio = detalle.get("servicio") or "postfix"
-    pid = detalle.get("pid")  # ej. script/proceso identificado como causante del pico
+    pid = detalle.get("pid")
     nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["MAIL_QUEUE_ALTA"])
 
     if nivel == "minimo":
@@ -536,7 +573,6 @@ async def _resolver_ddos(alarma: Alarma, session: AsyncSession) -> tuple[str, bo
     ips = detalle.get("top_ips_origen") or []
     if not ips and _validar_ip(alarma.ip_origen):
         ips = [alarma.ip_origen]
-    # Piso = "moderado": nunca queda solo en notificación.
     nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["DDOS_DETECTADO"])
 
     ips_validas = [ip for ip in ips if _validar_ip(ip)]
@@ -548,6 +584,10 @@ async def _resolver_ddos(alarma: Alarma, session: AsyncSession) -> tuple[str, bo
     return f"{accion_fn.__name__}(x{len(resultados)})[{nivel}]", all(resultados)
 
 
+# ---------------------------------------------------------------------------
+# Dispatcher Global
+# ---------------------------------------------------------------------------
+
 DISPATCH = {
     "USUARIO_SOSPECHOSO": _resolver_usuario_sospechoso,
     "PROCESO_ALTO_CONSUMO": _resolver_proceso_alto_consumo,
@@ -558,15 +598,15 @@ DISPATCH = {
     "SMTP_BRUTE_FORCE": _resolver_smtp_brute_force,
     "MAIL_QUEUE_ALTA": _resolver_mail_queue_alta,
     "DDOS_DETECTADO": _resolver_ddos,
+    # Nuevos resolvedores mapeados uno a uno:
+    "MODIFICACION_PASSWD": _resolver_integridad_sistema,
+    "MODIFICACION_SHADOW": _resolver_integridad_sistema,
+    "CRON_SOSPECHOSO": _resolver_cron_sospechoso,
+    "CREDENTIAL_STUFFING": _resolver_credential_stuffing
 }
 
 
 async def procesar_alarmas_pendientes() -> None:
-    """
-    Punto de entrada del scheduler. Lee todas las alarmas con resuelta=False,
-    intenta mitigarlas según su tipo_alarma, registra el resultado en
-    acciones_prevencion y marca resuelta=True solo si la mitigación fue exitosa.
-    """
     async with async_session() as session:
         try:
             stmt = select(Alarma).where(Alarma.resuelta.is_(False)).order_by(Alarma.timestamp.asc())

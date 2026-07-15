@@ -40,9 +40,7 @@ _ORDEN_NIVEL = {nivel: i for i, nivel in enumerate(NIVELES)}
 # lo que diga la configuración. Ajustar con criterio del equipo de seguridad.
 #
 #   - Alarmas con alta probabilidad de falso positivo o que requieren
-#     criterio humano (cuenta legítima usando algo raro, proceso pesado
-#     pero válido, escaneo ruidoso, pico de cola de correo) -> piso "minimo",
-#     el admin puede decidir no automatizar nada.
+#     criterio humano -> piso "minimo", el admin puede decidir no automatizar nada.
 #   - Alarmas de explotación activa o ataque en curso (exploit web, fuerza
 #     bruta, DDoS, archivo sospechoso ya corriendo) -> piso "moderado",
 #     nunca se puede silenciar del todo.
@@ -56,6 +54,10 @@ PISO_NIVEL = {
     "smtp_brute_force": "moderado",
     "mail_queue_alta": "minimo",
     "ddos_detectado": "moderado",
+    # Integración de las 3 discordancias del manual:
+    "integridad_sistema": "moderado",    # Para MODIFICACION_PASSWD y MODIFICACION_SHADOW (Gravedad Crítica)
+    "cron_sospechoso": "minimo",         # Para CRON_SOSPECHOSO
+    "credential_stuffing": "moderado",   # Para CREDENTIAL_STUFFING (Fuerza bruta automatizada)
 }
 
 
@@ -101,12 +103,7 @@ async def activar_estrategia(session: AsyncSession, grupo: str, nivel: str) -> b
     """
     Activa `nivel` dentro de `grupo` y desactiva cualquier otro nivel del
     mismo grupo (exclusión mutua). Pensado para invocarse desde un endpoint
-    del panel web (ej. un switch minimo/moderado/agresivo por tipo de alarma).
-
-    Rechaza la operación si `nivel` está por debajo del piso de seguridad
-    del grupo (ver PISO_NIVEL) — esto es lo que impide, a nivel de
-    aplicación, que se desactive la respuesta automática de alarmas
-    críticas desde el panel.
+    del panel web.
     """
     if nivel not in NIVELES:
         logger.warning("activar_estrategia: nivel inválido '%s' para grupo '%s'", nivel, grupo)
@@ -137,11 +134,6 @@ async def activar_estrategia(session: AsyncSession, grupo: str, nivel: str) -> b
 
     exito = resultado.rowcount > 0
     if exito:
-        # Auditoría: todo cambio de estrategia queda logueado. Si tu panel
-        # tiene un canal de notificación centralizado, es buena idea
-        # engancharlo acá también (ej. avisar al admin por correo cuando
-        # alguien cambia el nivel de un grupo crítico), para detectar un
-        # cambio no autorizado tan pronto como ocurre.
         logger.info(
             "Cambio de estrategia: grupo=%s nivel_anterior=%s nivel_nuevo=%s",
             grupo, nivel_anterior, nivel,

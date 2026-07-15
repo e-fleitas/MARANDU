@@ -103,7 +103,7 @@ def main():
             f.write(content)
 
     # 3. Aplicar configuración en caliente y reiniciar
-    subprocess.run(["systemctl", "restart", "postgresql-16"])
+    subprocess.run(["systemctl", "restart", "postgresql"])
 
     # 4. Configuración de seguridad en la DB
     # ⚡ La contraseña sigue viniendo de MARANDU_DB_APP_PASSWORD (variable de
@@ -131,7 +131,7 @@ def main():
     run_sql("ALTER SYSTEM SET pgaudit.log = 'all';", args.user, "postgres")
 
     # 5. Reinicio final para aplicar cambios de ALTER SYSTEM
-    subprocess.run(["systemctl", "restart", "postgresql-16"])
+    subprocess.run(["systemctl", "restart", "postgresql"])
     run_sql("SELECT pg_reload_conf();", args.user, "postgres")
 
     print("[+] Hardening aplicado con éxito.")

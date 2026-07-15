@@ -1,38 +1,41 @@
 #!/bin/bash
 # ==============================================================================
-# M.A.R.A.N.D.U. - Script de Configuración Web y Entorno Virtual
-# ==============================================================================
-#
-# Además de crear el venv e instalar dependencias, este script deja la base
-# de datos lista: crea las tablas y carga `configuracion_modulos` con los
-# 3 niveles (minimo/moderado/agresivo) de cada grupo de alarma, respetando
-# el piso de seguridad definido en prevention/strategia.py.
-#
-# Opcional: para que también se cargue la configuración de notificaciones
-# SMTP, exportá estas variables antes de correr el script:
-#   SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, ADMIN_EMAIL
-# Si no están seteadas, el script avisa y podés volver a correr el seed
-# más adelante con: python -m db.seed_config
+# M.A.R.A.N.D.U. - Fase 2: Configuración de la App, Base de Datos y Servicio
 # ==============================================================================
 set -e
 
-# Validar de forma estricta que no se esté ejecutando como root accidentalmente
+# Validar de forma estricta que no se esté ejecutando como root accidentalmente[cite: 5]
 if [ "$USER" != "marandu" ]; then
     echo "[!] Error de seguridad: Este script debe ser ejecutado exclusivamente por el usuario 'marandu'."
-    echo "    Por favor usa: sudo -u marandu ./setup_web.sh"
+    echo "    Por favor usa: sudo -u marandu ./setup_web.sh [contraseña_db]"
     exit 1
 fi
 
-# Definición de rutas del ecosistema local
 PROJ_DIR=$(pwd)
 VENV_DIR="$PROJ_DIR/venv"
 REQ_FILE="$PROJ_DIR/web/requirements.txt"
+
+# Capturar la contraseña de la base de datos
+DB_PASS="$1"
+
+# Si no se pasó como parámetro de consola, pedirla interactivamente de forma segura
+if [ -z "$DB_PASS" ]; then
+    echo "--- AUTENTICACIÓN DE BASE DE DATOS (Fase 2) ---"
+    read -sp "[?] Ingresa la contraseña del usuario DB 'marandu_app' para configurar el servicio: " DB_PASS
+    echo ""
+    echo "------------------------------------------------"
+fi
+
+if [ -z "$DB_PASS" ]; then
+    echo "[!] Error: Se requiere la contraseña de la base de datos para continuar."
+    exit 1
+fi
 
 echo "=============================================================================="
 echo "[+] Iniciando configuración del entorno virtual para la interfaz de M.A.R.A.N.D.U..."
 echo "=============================================================================="
 
-# 1. Inicializar el entorno virtual de Python
+# 1. Crear el entorno virtual si no existe[cite: 5]
 if [ ! -d "$VENV_DIR" ]; then
     echo "[+] Creando entorno virtual aislado (venv) en $VENV_DIR..."
     python3 -m venv "$VENV_DIR"
@@ -40,37 +43,79 @@ else
     echo "[ ] El entorno virtual ya se encuentra inicializado."
 fi
 
-# 2. Activar el entorno e instalar dependencias de la aplicación
+# 2. Activar el entorno e instalar dependencias[cite: 5]
 echo "[+] Activando entorno virtual..."
 source "$VENV_DIR/bin/activate"
 
-echo "[+] Actualizando administrador de paquetes pip..."
+echo "[+] Actualizando pip..."
 pip install --upgrade pip
 
-# 3. Instalación de paquetes de Python
+# 3. Instalación de dependencias de Python (Protegido contra el bug de db_writer)[cite: 5]
 if [ -f "$REQ_FILE" ]; then
+    echo "[+] Limpiando dependencias locales conflictivas en requirements.txt..."
+    # Eliminar cualquier referencia a 'db_writer' temporalmente para que pip no falle
+    sed -i '/db_writer/d' "$REQ_FILE"
+    
     echo "[+] Instalando dependencias desde $REQ_FILE..."
     pip install -r "$REQ_FILE"
-    echo "[+] Todas las librerías de Python se instalaron con éxito."
 else
-    echo "[!] Advertencia: No se detectó el archivo de requerimientos en $REQ_FILE."
-    echo "[+] Instalando dependencias base estándar para el Dashboard (FastAPI/Uvicorn)..."
-    pip install fastapi uvicorn pydantic
+    echo "[!] Advertencia: No se detectó requirements.txt. Instalando stack base..."
+    pip install fastapi uvicorn pydantic jinja2 python-multipart itsdangerous python-dotenv psycopg2-binary sqlalchemy asyncpg psutil passlib bcrypt
 fi
 
-# Estas 3 son necesarias para el paso de seed de la BD (punto 4) sin
-# importar si ya vinieron o no en requirements.txt.
+# Asegurar módulos para bases de datos asíncronas
 pip install "sqlalchemy[asyncio]" asyncpg python-dotenv
 
-# 4. Preparar la base de datos: crear tablas y cargar configuracion_modulos
-#    (idempotente: se puede correr de nuevo sin duplicar filas ni pisar
-#    niveles ya configurados a mano desde el panel).
-echo "[+] Preparando base de datos (tablas + configuracion_modulos)..."
+# 4. Crear tablas y correr el Seed de Configuración (Idempotente)[cite: 5]
+# Exportamos temporalmente la variable para que seed_config.py sepa conectarse sin .env ni preguntar de nuevo
+export DB_PASSWORD="$DB_PASS"
+echo "[+] Preparando la base de datos (tablas + configuración inicial)..."
 python -m db.seed_config
+unset DB_PASSWORD
+
+# 5. SOLUCIÓN AL ERROR DE PERMISOS (Paso crítico antes de configurar Systemd)[cite: 5]
+echo "[+] Corrigiendo permisos físicos y contextos de SELinux para el servicio..."
+
+# Nota: Como quitamos el archivo .env físico, ya no necesitamos cambiar sus permisos de disco.
+# Aplicar las etiquetas requeridas de SELinux para que Systemd pueda operar desde /home
+# Nota: Usamos 'sudo' ya que estas operaciones del kernel de seguridad requieren privilegios elevados.[cite: 5]
+sudo chcon -R -t bin_t "$VENV_DIR/bin/"
+
+# 6. Crear el archivo de servicio de Systemd (Inyectando variables seguras de entorno)[cite: 5]
+echo "[+] Creando servicio de sistema (marandu-web.service)..."
+sudo tee /etc/systemd/system/marandu-web.service > /dev/null <<EOF
+[Unit]
+Description=M.A.R.A.N.D.U. Interfaz Web (Uvicorn)
+After=network.target postgresql.service
+
+[Service]
+User=marandu
+Group=marandu
+WorkingDirectory=$PROJ_DIR
+# Pasamos las credenciales de forma segura al entorno del proceso sin leer un archivo .env
+Environment="DB_USER=marandu_app"
+Environment="DB_PASSWORD=$DB_PASS"
+Environment="DB_NAME=marandu"
+Environment="DB_HOST=127.0.0.1"
+Environment="DB_PORT=5432"
+ExecStart=$VENV_DIR/bin/uvicorn web.app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 7. Recargar systemd y arrancar la aplicación[cite: 5]
+echo "[+] Levantando y habilitando servicios..."
+sudo systemctl daemon-reload
+sudo systemctl enable --now marandu-web.service
+sudo systemctl restart nginx.service
+sudo systemctl enable nginx.service
 
 echo "=============================================================================="
-echo "[✓] FASE 2 COMPLETADA: Entorno web de M.A.R.A.N.D.U. listo."
-echo "Para levantar el Panel de Control con Uvicorn de manera manual, ejecuta:"
-echo "    source venv/bin/activate"
-echo "    uvicorn web.app:app --host 0.0.0.0 --port 8000"
+echo "[✓] PROCESO DE INSTALACIÓN COMPLETADO CON ÉXITO."
+echo "La base de datos y sus módulos de mitigación están sembrados de forma segura."
+echo "Puedes acceder al panel del HIPS M.A.R.A.N.D.U. en:"
+echo "    http://localhost"
 echo "=============================================================================="

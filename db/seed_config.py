@@ -41,6 +41,14 @@ DEFAULT_NIVEL = "moderado"
 NOTIF_GRUPO = "notificaciones"
 NOTIF_PARAMS = ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "admin_email")
 
+# Grupos de mitigación que solucionan las discordancias con el manual.
+# Aseguramos sus pisos de seguridad mínimos según su criticidad.
+PISOS_ADICIONALES = {
+    "integridad_sistema": "moderado",  # Para MODIFICACION_PASSWD y MODIFICACION_SHADOW
+    "cron_sospechoso": "minimo",       # Para CRON_SOSPECHOSO
+    "credential_stuffing": "moderado"  # Para CREDENTIAL_STUFFING
+}
+
 
 async def _crear_tablas() -> None:
     async with engine.begin() as conn:
@@ -48,7 +56,7 @@ async def _crear_tablas() -> None:
     print("[+] Tablas verificadas/creadas.")
 
 
-async def _sembrar_grupo_estrategia(session, grupo: str) -> int:
+async def _sembrar_grupo_estrategia(session, grupo: str, piso: str) -> int:
     """Inserta las filas faltantes de un grupo. Si el grupo no tiene
     todavía ningún nivel activo, activa DEFAULT_NIVEL (o el piso del
     grupo si DEFAULT_NIVEL queda por debajo de él). Si el grupo ya tiene
@@ -59,7 +67,6 @@ async def _sembrar_grupo_estrategia(session, grupo: str) -> int:
     ya_tiene_activo = any(f.activo for f in filas_existentes.values())
 
     nivel_default = DEFAULT_NIVEL
-    piso = PISO_NIVEL.get(grupo, "minimo")
     if NIVELES.index(nivel_default) < NIVELES.index(piso):
         nivel_default = piso  # nunca sembrar por debajo del piso del grupo
 
@@ -102,10 +109,14 @@ async def _sembrar_notificaciones(session) -> list[str]:
 async def main() -> None:
     await _crear_tablas()
 
+    # Combinamos dinámicamente los pisos de estrategia base y los nuevos grupos
+    # para evitar duplicaciones y mantener la compatibilidad con strategia.py
+    todos_los_pisos = {**PISO_NIVEL, **PISOS_ADICIONALES}
+
     async with async_session() as session:
         total_creadas = 0
-        for grupo in PISO_NIVEL:  # los 9 grupos de alarma están definidos ahí
-            total_creadas += await _sembrar_grupo_estrategia(session, grupo)
+        for grupo, piso in todos_los_pisos.items():
+            total_creadas += await _sembrar_grupo_estrategia(session, grupo, piso)
 
         faltantes = await _sembrar_notificaciones(session)
         await session.commit()
