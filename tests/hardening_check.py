@@ -79,12 +79,12 @@ def verify_sysctl_network():
             "net.ipv4.conf.all.rp_filter": "1",                 # Mitigación Spoofing / Reverse Path Filter
             "net.ipv4.conf.default.rp_filter": "1"              # Reverse Path Filter (Por defecto)
         }
-        
+
         for param, expected in checks.items():
             res = subprocess.run(["sysctl", "-n", param], capture_output=True, text=True)
             if res.stdout.strip() != expected:
                 return False  # Si uno solo no coincide, la validación de red segura falla
-                
+
         return True
     except Exception:
         return False
@@ -109,7 +109,24 @@ def verify_pam_pwquality():
         with open(config_path, "r") as f:
             content = f.read()
             has_minlen = re.search(r'^\s*minlen\s*=\s*\d+', content, re.MULTILINE) is not None
-            return has_minlen
+
+        # No alcanza con que pwquality.conf tenga minlen: si pam_pwquality.so
+        # no está efectivamente incluido en el stack PAM activo (por ejemplo
+        # porque la feature "with-pwquality" de authselect no llegó a
+        # habilitarse en el perfil seleccionado), esos valores nunca se
+        # aplican en un login real -- el .conf existe pero nadie lo lee.
+        # Confirmamos que el módulo esté realmente cargado en los archivos
+        # PAM relevantes, igual que ya se hace para pam_faillock.so.
+        module_loaded = False
+        files_to_check = ["/etc/pam.d/system-auth", "/etc/pam.d/password-auth"]
+        for file in files_to_check:
+            if os.path.exists(file):
+                with open(file, "r") as f:
+                    if "pam_pwquality.so" in f.read():
+                        module_loaded = True
+                        break
+
+        return has_minlen and module_loaded
     except Exception:
         return False
 

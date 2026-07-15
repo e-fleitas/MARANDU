@@ -12,9 +12,12 @@ fi
 
 PROJ_DIR=$(pwd)
 ENV_FILE="$PROJ_DIR/.env"
+VENV_DIR="$PROJ_DIR/venv"
+PREVENTION_DIR="$PROJ_DIR/prevention"
 
 echo "=============================================================================="
 echo "[+] Iniciando configuración de seguridad de Base de Datos para M.A.R.A.N.D.U..."
+echo "    Directorio del proyecto detectado: $PROJ_DIR"
 echo "=============================================================================="
 
 # 1. Solicitar contraseñas de Base de Datos de forma segura
@@ -95,12 +98,69 @@ else
 fi
 
 # 9. Configurar sudoers para las acciones del HIPS[cite: 4]
+# NOTA: VENV_DIR y PREVENTION_DIR se calculan a partir de PROJ_DIR (pwd al ejecutar este
+# script), así que las rutas quedan correctas para la instalación actual sin hardcodear nada.
+# El venv todavía no existe en este punto (lo crea setup_web.sh en Fase 2, como el usuario
+# 'marandu'), pero sudoers no necesita que el binario exista al momento de escribir la regla,
+# solo al momento de ejecutarla.
 echo "[+] Configurando /etc/sudoers.d/marandu..."
 mkdir -p /etc/sudoers.d
 cat <<EOF > /etc/sudoers.d/marandu
-marandu ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart marandu-web, /usr/bin/systemctl status marandu-web, /usr/bin/systemctl restart nginx, /usr/bin/firewall-cmd *
+# Generado automáticamente por setup_env.sh - $(date '+%Y-%m-%d %H:%M:%S')
+# Proyecto: $PROJ_DIR
+Defaults:marandu !requiretty
+
+# --- Gestión del propio servicio ---
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl restart marandu-web
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl status marandu-web
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
+marandu ALL=(root) NOPASSWD: /usr/bin/firewall-cmd *
+
+# --- Grupo A: scripts de hardening standalone (prevention/) ---
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/auditd.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/banner.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/firewall.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/pam_faillock.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/password_hardening.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/secure_tmp_mount.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/selinux.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/sysctl.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/ssh_hardening.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/ssh_hardening.py *
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/rsyslog_centralization.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $PREVENTION_DIR/db_auth.py -p * -d * -u *
+marandu ALL=(root) NOPASSWD: /usr/sbin/sshd -T
+marandu ALL=(root) NOPASSWD: /usr/bin/auditctl -l
+marandu ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
+
+# --- Grupo C: comandos puntuales de mitigation_actions.py ---
+marandu ALL=(root) NOPASSWD: /usr/bin/firewall-cmd --permanent --zone=drop --add-source=*
+marandu ALL=(root) NOPASSWD: /usr/bin/firewall-cmd --permanent --zone=drop --add-rich-rule=*
+marandu ALL=(root) NOPASSWD: /usr/bin/firewall-cmd --reload
+marandu ALL=(root) NOPASSWD: /usr/sbin/chpasswd
+marandu ALL=(root) NOPASSWD: /usr/sbin/usermod -L *
+marandu ALL=(root) NOPASSWD: /usr/bin/dnf remove -y tcpdump
+marandu ALL=(root) NOPASSWD: /usr/bin/dnf remove -y wireshark
+marandu ALL=(root) NOPASSWD: /usr/bin/dnf remove -y wireshark-cli
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop sshd
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop crond
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop postfix
+
+# --- Grupo B: kill / renice / cuarentena (mitigation_actions.py refactorizado a subprocess) ---
+marandu ALL=(root) NOPASSWD: /usr/bin/kill -9 *
+marandu ALL=(root) NOPASSWD: /usr/bin/renice -n * -p *
+marandu ALL=(root) NOPASSWD: /usr/bin/mv * /var/lib/hips/quarantine/*
+marandu ALL=(root) NOPASSWD: /usr/bin/chmod 000 /var/lib/hips/quarantine/*
 EOF
 chmod 440 /etc/sudoers.d/marandu
+
+echo "[*] Validando sintaxis del archivo sudoers recién generado..."
+if visudo -c -f /etc/sudoers.d/marandu; then
+    echo "[+] Sintaxis de sudoers válida."
+else
+    echo "❌ Error: la sintaxis de /etc/sudoers.d/marandu es inválida. Revertir manualmente."
+    exit 1
+fi
 
 # 10. Configurar Nginx como Proxy Inverso[cite: 4]
 echo "[+] Configurando Nginx..."
@@ -137,6 +197,8 @@ chown -R marandu:marandu "$PROJ_DIR"
 echo "=============================================================================="
 echo "[✓] CONFIGURACIÓN DE BASE DE DATOS Y ENTORNO TERMINADA."
 echo "La base de datos ya está protegida con un rol limitado sin superusuario."
+echo "El usuario 'marandu' ya tiene los permisos sudo mínimos necesarios para"
+echo "ejecutar los módulos de hardening y reacción sin ser root."
 echo "Para levantar el sitio, corre la Fase 2 como el usuario 'marandu':"
 echo "    sudo -u marandu ./setup_web.sh"
 echo "=============================================================================="

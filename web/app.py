@@ -18,6 +18,15 @@ import psycopg2
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
+# Intérprete de Python del venv del proyecto. Los scripts de prevention/ se
+# ejecutan con este binario (no con "python3" a secas) porque las reglas
+# NOPASSWD de /etc/sudoers.d/marandu exigen la ruta absoluta exacta del venv
+# -- sudo compara el comando resuelto contra el patrón de la regla, y
+# "python3" resuelto vía $PATH normalmente apunta a /usr/bin/python3, que no
+# matchea, causando que sudo caiga a modo interactivo (sin -n, esto puede
+# colgar el proceso hasta el timeout en vez de fallar rápido).
+VENV_PYTHON = str(BASE_DIR / "venv" / "bin" / "python3")
+
 # Rutas físicas hacia los scripts de remediación
 DB_AUTH_SCRIPT = str(BASE_DIR / "prevention" / "db_auth.py")
 
@@ -519,7 +528,11 @@ async def apply_hardening(control_id: str, request: Request, user: str = Depends
                 detail="Falta configurar MARANDU_DB_APP_PASSWORD en el archivo .env web.",
             )
 
-        cmd = ["sudo", "python3", DB_AUTH_SCRIPT, "-p", app_db_password, "-u", req_db_user, "-d", req_db_name]
+        # El orden de los flags debe coincidir literalmente con la regla de
+        # sudoers ("... db_auth.py -p * -d * -u *"): sudo hace matching de
+        # string sobre la línea de comando completa, no parseo de argumentos,
+        # así que "-p -u -d" no matchea aunque sea semánticamente equivalente.
+        cmd = ["sudo", "-n", VENV_PYTHON, DB_AUTH_SCRIPT, "-p", app_db_password, "-d", req_db_name, "-u", req_db_user]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
             return {
@@ -539,7 +552,7 @@ async def apply_hardening(control_id: str, request: Request, user: str = Depends
     script_path = STRATEGY_SCRIPTS[control_id]
     try:
         result = subprocess.run(
-            ["sudo", "python3", script_path],
+            ["sudo", "-n", VENV_PYTHON, script_path],
             capture_output=True,
             text=True,
             check=True,

@@ -2,6 +2,21 @@
 prevention/mitigation_actions.py
 
 Módulo de prevención automatizada para M.A.R.A.N.D.U.
+
+NOTA (ejecución bajo el usuario de servicio 'marandu'):
+Todas las acciones que tocan el sistema (firewall, cuentas de usuario, procesos,
+paquetes, servicios, cuarentena de archivos) se ejecutan vía `sudo -n <binario>`.
+El proceso de la app (marandu-web.service) corre como 'marandu', sin privilegios
+de root; las reglas exactas que autorizan cada uno de estos comandos están en
+/etc/sudoers.d/marandu (generado por setup_env.sh). El flag `-n` (no interactivo)
+hace que, si por algún motivo la regla de sudoers no matchea, el comando falle
+de inmediato en vez de quedar colgado esperando una contraseña que nunca va a
+llegar (lo cual trabaría el worker async de alarmas).
+
+Las funciones que originalmente usaban syscalls directas de Python (os.kill,
+os.setpriority, os.chmod, shutil.move) fueron migradas a subprocess + sudo,
+porque sudo solo puede mediar la ejecución de binarios externos, no llamadas
+de sistema hechas dentro del propio proceso de marandu-web.service.
 """
 
 from __future__ import annotations
@@ -13,7 +28,6 @@ import os
 import re
 import secrets
 import shutil
-import signal
 import smtplib
 import string
 import subprocess
@@ -184,11 +198,11 @@ def ip_block(ip_origen: str) -> bool:
         return False
     try:
         subprocess.run(
-            ["firewall-cmd", "--permanent", "--zone=drop", f"--add-source={ip_origen}"],
+            ["sudo", "-n", "/usr/bin/firewall-cmd", "--permanent", "--zone=drop", f"--add-source={ip_origen}"],
             check=True, capture_output=True, text=True, timeout=15,
         )
         subprocess.run(
-            ["firewall-cmd", "--reload"],
+            ["sudo", "-n", "/usr/bin/firewall-cmd", "--reload"],
             check=True, capture_output=True, text=True, timeout=15,
         )
         _log_accion("ip_block", "bloqueo de IP", ip_origen)
@@ -205,11 +219,11 @@ def ip_rate_limit(ip_origen: str, limite: str = "10/m") -> bool:
     regla = f"rule family='ipv4' source address='{ip_origen}' accept limit value='{limite}'"
     try:
         subprocess.run(
-            ["firewall-cmd", "--permanent", "--zone=drop", f"--add-rich-rule={regla}"],
+            ["sudo", "-n", "/usr/bin/firewall-cmd", "--permanent", "--zone=drop", f"--add-rich-rule={regla}"],
             check=True, capture_output=True, text=True, timeout=15,
         )
         subprocess.run(
-            ["firewall-cmd", "--reload"],
+            ["sudo", "-n", "/usr/bin/firewall-cmd", "--reload"],
             check=True, capture_output=True, text=True, timeout=15,
         )
         _log_accion("ip_rate_limit", "limite de tasa aplicado", ip_origen)
@@ -220,19 +234,31 @@ def ip_rate_limit(ip_origen: str, limite: str = "10/m") -> bool:
 
 
 def throttle_proceso(pid, prioridad: int = 19) -> bool:
+    """
+    Reduce la prioridad del proceso. Antes usaba os.setpriority() directamente,
+    pero eso requiere que el proceso de marandu-web sea dueño del PID objetivo
+    (o root). Se migra a `renice` vía sudo para poder actuar sobre procesos de
+    cualquier usuario, que es el caso real de un proceso malicioso detectado.
+    """
     pid_valido = _validar_pid(pid)
     if pid_valido is None:
         logger.warning("throttle_proceso: PID inválido: %r", pid)
         return False
     try:
-        os.setpriority(os.PRIO_PROCESS, pid_valido, prioridad)
+        subprocess.run(
+            ["sudo", "-n", "/usr/bin/renice", "-n", str(prioridad), "-p", str(pid_valido)],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
         _log_accion("throttle_proceso", "prioridad reducida", str(pid_valido))
         return True
-    except ProcessLookupError:
-        logger.info("throttle_proceso: PID %s ya no existe (posible carrera)", pid_valido)
-        return True
-    except PermissionError:
-        logger.exception("throttle_proceso: permisos insuficientes para PID %s", pid_valido)
+    except subprocess.CalledProcessError as e:
+        if "No such process" in (e.stderr or ""):
+            logger.info("throttle_proceso: PID %s ya no existe (posible carrera)", pid_valido)
+            return True
+        logger.exception("throttle_proceso: fallo para PID %s (%s)", pid_valido, e.stderr)
+        return False
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logger.exception("throttle_proceso falló para %s", pid_valido)
         return False
 
 
@@ -244,7 +270,7 @@ def change_pass_usr(nombre_usr: str) -> Optional[str]:
     nueva_pass = "".join(secrets.choice(alfabeto) for _ in range(20))
     try:
         subprocess.run(
-            ["chpasswd"],
+            ["sudo", "-n", "/usr/sbin/chpasswd"],
             input=f"{nombre_usr}:{nueva_pass}\n",
             check=True, capture_output=True, text=True, timeout=10,
         )
@@ -261,7 +287,7 @@ def bloq_usr(nombre_usr: str) -> bool:
         return False
     try:
         subprocess.run(
-            ["usermod", "-L", nombre_usr],
+            ["sudo", "-n", "/usr/sbin/usermod", "-L", nombre_usr],
             check=True, capture_output=True, text=True, timeout=10,
         )
         _log_accion("bloq_usr", "bloqueo de cuenta", nombre_usr)
@@ -272,19 +298,31 @@ def bloq_usr(nombre_usr: str) -> bool:
 
 
 def kill_proces(pid) -> bool:
+    """
+    Termina el proceso. Antes usaba os.kill() directamente, pero eso requiere
+    que marandu-web sea dueño del PID objetivo (o root). Se migra a `kill`
+    vía sudo por el mismo motivo que throttle_proceso.
+    """
     pid_valido = _validar_pid(pid)
     if pid_valido is None:
         logger.warning("kill_proces: PID inválido: %r", pid)
         return False
     try:
-        os.kill(pid_valido, signal.SIGKILL)
+        subprocess.run(
+            ["sudo", "-n", "/usr/bin/kill", "-9", str(pid_valido)],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
         _log_accion("kill_proces", "proceso terminado", str(pid_valido))
         return True
-    except ProcessLookupError:
-        logger.info("kill_proces: PID %s ya no existe (posible carrera)", pid_valido)
-        return True
-    except PermissionError:
-        logger.exception("kill_proces: permisos insuficientes para PID %s", pid_valido)
+    except subprocess.CalledProcessError as e:
+        # kill devuelve error si el PID ya no existe (posible carrera): no es una falla real
+        if "No such process" in (e.stderr or ""):
+            logger.info("kill_proces: PID %s ya no existe (posible carrera)", pid_valido)
+            return True
+        logger.exception("kill_proces: fallo matando PID %s (%s)", pid_valido, e.stderr)
+        return False
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        logger.exception("kill_proces falló para %s", pid_valido)
         return False
 
 
@@ -298,7 +336,7 @@ def ban_tool(nombre_binario: str) -> bool:
         return True
     try:
         subprocess.run(
-            ["dnf", "remove", "-y", paquete],
+            ["sudo", "-n", "/usr/bin/dnf", "remove", "-y", paquete],
             check=True, capture_output=True, text=True, timeout=60,
         )
         _log_accion("ban_tool", "herramienta no autorizada eliminada", nombre_binario)
@@ -314,7 +352,7 @@ def stop_service(nombre_servicio: str) -> bool:
         return False
     try:
         subprocess.run(
-            ["systemctl", "stop", nombre_servicio],
+            ["sudo", "-n", "/usr/bin/systemctl", "stop", nombre_servicio],
             check=True, capture_output=True, text=True, timeout=15,
         )
         _log_accion("stop_service", "servicio detenido", nombre_servicio)
@@ -325,6 +363,13 @@ def stop_service(nombre_servicio: str) -> bool:
 
 
 def quarantine_file(ruta_archivo: str) -> bool:
+    """
+    Mueve el archivo a cuarentena y le quita todos los permisos. El archivo
+    origen puede pertenecer a otro usuario/proceso, así que el mv y el chmod
+    finales requieren root; se migran a sudo. La construcción del path de
+    destino y el makedirs del directorio de cuarentena no tocan nada ajeno,
+    así que se quedan en Python puro.
+    """
     origen = _validar_ruta_cuarentena(ruta_archivo)
     if origen is None:
         logger.warning("quarantine_file: ruta inválida o inexistente: %r", ruta_archivo)
@@ -333,11 +378,18 @@ def quarantine_file(ruta_archivo: str) -> bool:
         os.makedirs(QUARANTINE_DIR, exist_ok=True)
         marca = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
         destino = Path(QUARANTINE_DIR) / f"{marca}_{origen.name}"
-        shutil.move(str(origen), str(destino))
-        os.chmod(destino, 0o000)
+
+        subprocess.run(
+            ["sudo", "-n", "/usr/bin/mv", str(origen), str(destino)],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
+        subprocess.run(
+            ["sudo", "-n", "/usr/bin/chmod", "000", str(destino)],
+            check=True, capture_output=True, text=True, timeout=10,
+        )
         _log_accion("quarantine_file", "archivo puesto en cuarentena", str(origen))
         return True
-    except OSError:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError):
         logger.exception("quarantine_file falló para %s", ruta_archivo)
         return False
 
