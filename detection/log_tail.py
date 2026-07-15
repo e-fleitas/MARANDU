@@ -14,6 +14,8 @@ El resto de log_analyzer.py se construye sobre esta base en los próximos pasos.
 import os
 import sys
 import time
+from heartbeat import marcar_heartbeat
+NOMBRE_DETECTOR = "mail_queue_monitor"
 
 
 class LogTail:
@@ -185,5 +187,6 @@ if __name__ == "__main__":
 
     ruta_arg = sys.argv[1]
     duracion_arg = int(sys.argv[2]) if len(sys.argv) > 2 else 30
+    marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=total, ok=True)
     demo_seguir_archivo(ruta_arg, duracion_arg)
 

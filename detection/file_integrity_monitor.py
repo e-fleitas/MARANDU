@@ -24,6 +24,8 @@ import os
 import sys
 import hashlib
 from datetime import datetime, timezone
+from heartbeat import marcar_heartbeat
+NOMBRE_DETECTOR = "mail_queue_monitor"
 
 from db_writer import obtener_conexion, insertar_alarma, insertar_evento_raw
 

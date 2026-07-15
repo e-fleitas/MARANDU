@@ -137,6 +137,51 @@ ALARM_TIPO_TO_GRUPO = {
 }
 GRUPO_A_TIPO_ALARMA = {grupo: tipo for tipo, grupo in ALARM_TIPO_TO_GRUPO.items()}
 
+# Mapeo grupo de estrategia -> nombre_detector (id usado en el heartbeat,
+# ver detection/heartbeat.py). El nombre debe ser exactamente el que cada
+# script pasa a marcar_heartbeat(...) al terminar su pasada.
+GRUPO_A_DETECTOR = {
+    "usuario_sospechoso": "users_monitor",
+    "proceso_alto_consumo": "process_monitor",
+    "archivo_tmp_sospechoso": "tmp_monitor",
+    "web_scan_404": "log_analyzer",
+    "web_exploit_500": "log_analyzer",
+    "failed_login_multiple": "log_analyzer",
+    "smtp_brute_force": "log_analyzer",
+    "mail_queue_alta": "mail_queue_monitor",
+    "ddos_detectado": "ddos_detector",
+}
+
+# Los detectores corren por cron cada 2 minutos (120s). Si no hubo
+# heartbeat en este umbral, lo mostramos como inactivo -- el margen extra
+# sobre 120s absorbe jitter normal de cron sin tardar en avisar.
+UMBRAL_DETECTOR_ACTIVO_SEGUNDOS = 150
+
+from detection.heartbeat import leer_heartbeats
+
+
+def _detector_activo(nombre_detector: str, heartbeats: dict) -> tuple[bool, str | None]:
+    """Devuelve (activo, ultima_ejecucion_iso) para un detector dado el
+    dict ya leído de leer_heartbeats(). 'activo' exige heartbeat reciente
+    Y que la última pasada haya terminado sin excepción (ok=True)."""
+    registro = heartbeats.get(nombre_detector)
+    if not registro:
+        return False, None
+
+    ultima_ejecucion_iso = registro.get("ultima_ejecucion")
+    if not ultima_ejecucion_iso:
+        return False, None
+
+    try:
+        ultima_ejecucion = datetime.datetime.fromisoformat(ultima_ejecucion_iso)
+    except ValueError:
+        return False, None
+
+    ahora = datetime.datetime.now(datetime.timezone.utc)
+    antiguedad = (ahora - ultima_ejecucion).total_seconds()
+    activo = antiguedad <= UMBRAL_DETECTOR_ACTIVO_SEGUNDOS and registro.get("ok", True)
+    return activo, ultima_ejecucion_iso
+
 # ⚡ Autenticación centralizada real (rate limiting, CSRF por sesión,
 # comparación en tiempo constante, usuarios en DB). Ya no se reimplementa
 # nada de esto acá.
@@ -423,9 +468,15 @@ async def api_estrategias(
         if grupo_de_tipo:
             conteo_por_grupo[grupo_de_tipo] = conteo_por_grupo.get(grupo_de_tipo, 0) + cantidad
 
+    heartbeats = leer_heartbeats()
+
     resultado = []
     for grupo, piso in PISO_NIVEL.items():
         nivel_actual = await obtener_estrategia_activa(db, grupo)
+        nombre_detector = GRUPO_A_DETECTOR.get(grupo)
+        detector_activo, detector_ultima_ejecucion = (
+            _detector_activo(nombre_detector, heartbeats) if nombre_detector else (False, None)
+        )
         resultado.append({
             "grupo": grupo,
             "etiqueta": GRUPO_ESTRATEGIA_LABELS.get(grupo, grupo),
@@ -434,6 +485,9 @@ async def api_estrategias(
             "piso": piso,
             "niveles": list(NIVELES_ESTRATEGIA),
             "alarmas_pendientes": conteo_por_grupo.get(grupo, 0),
+            "detector": nombre_detector,
+            "detector_activo": detector_activo,
+            "detector_ultima_ejecucion": detector_ultima_ejecucion,
         })
     return {"estrategias": resultado}
 

@@ -41,7 +41,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db.models import Alarma, AccionPrevencion, ConfiguracionModulo
 from db.session import async_session
 
-from prevention.estrategias import obtener_nivel_efectivo, NIVELES  # noqa: F401
+from prevention.strategia import obtener_nivel_efectivo, NIVELES  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Configuración estática / listas blancas

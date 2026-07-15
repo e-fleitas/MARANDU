@@ -20,6 +20,8 @@ import os
 import sys
 import json
 from datetime import datetime, timezone
+from heartbeat import marcar_heartbeat
+NOMBRE_DETECTOR = "process_monitor"
 
 try:
     import psutil
@@ -247,9 +249,11 @@ if __name__ == "__main__":
     try:
         total = verificar_procesos()
         print(f"[+] Verificación completada. Alarmas emitidas: {total}")
+        marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=total, ok=True)
     except KeyboardInterrupt:
         print("\n[.] Verificación interrumpida por el usuario.")
         sys.exit(0)
     except Exception as e:
         print(f"[-] Error fatal en process_monitor: {e}", file=sys.stderr)
+        marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=0, ok=False)
         sys.exit(1)

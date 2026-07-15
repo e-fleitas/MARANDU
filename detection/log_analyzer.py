@@ -24,6 +24,8 @@ import collections
 
 from log_tail import LogTail
 from db_writer import obtener_conexion, insertar_evento_raw, insertar_alarma
+from heartbeat import marcar_heartbeat
+NOMBRE_DETECTOR = "log_analyzer"
 
 MODULO_NOMBRE = "modulo_iv"
 
@@ -690,5 +692,6 @@ def monitorear_todas_las_fuentes(duracion_segundos=None):
 
 
 if __name__ == "__main__":
+    marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=1, ok=True)
     duracion = int(sys.argv[1]) if len(sys.argv) > 1 else None
     monitorear_todas_las_fuentes(duracion_segundos=duracion)

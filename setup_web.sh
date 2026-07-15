@@ -113,6 +113,31 @@ sudo systemctl enable --now marandu-web.service
 sudo systemctl restart nginx.service
 sudo systemctl enable nginx.service
 
+# 8. Instalar el cron del DISPATCHER de mitigación (prevention/mitigation_actions.py)
+#
+# Los resolvedores por tipo_alarma (DISPATCH) y la exclusión de niveles
+# (prevention/strategia.py) ya están implementados y listos: lo único que
+# faltaba era ALGO que llame periódicamente a procesar_alarmas_pendientes()
+# para que cada alarma con resuelta=False dispare su acción automáticamente.
+# Este cron corre como 'marandu' (sin sudo, mitigation_actions.py invoca sudo
+# -n internamente solo para los comandos puntuales que sí lo requieren).
+#
+# Se instala de forma idempotente: si ya existe una línea con el marcador
+# MARANDU_MITIGACION, no se duplica (permite re-correr este script sin
+# ensuciar el crontab).
+# mitigation_actions.py (a diferencia de app.py) NO llama a load_dotenv():
+# solo lee variables ya presentes en el entorno del proceso. Si no exporta
+# DB_PASSWORD, db.session cae a un prompt interactivo -- y cron no tiene
+# terminal ni stdin, así que ese prompt cuelga el proceso indefinidamente
+# en vez de fallar. Por eso el cron carga explícitamente el .env del
+# proyecto (set -a / source / set +a) antes de invocar el módulo.
+echo "[+] Instalando cron del dispatcher de mitigación de alarmas..."
+CRON_MARCADOR="MARANDU_MITIGACION"
+CRON_LINEA="* * * * * /bin/bash -lc 'cd $PROJ_DIR && set -a && source $PROJ_DIR/.env && set +a && $VENV_DIR/bin/python3 -m prevention.mitigation_actions' >> /var/log/hips/mitigacion_cron.log 2>&1 # $CRON_MARCADOR"
+
+( crontab -l 2>/dev/null | grep -v "$CRON_MARCADOR" ; echo "$CRON_LINEA" ) | crontab -
+echo "[+] Cron instalado: el dispatcher de mitigación corre cada minuto, cargando .env antes de ejecutar."
+
 echo "=============================================================================="
 echo "[✓] PROCESO DE INSTALACIÓN COMPLETADO CON ÉXITO."
 echo "La base de datos y sus módulos de mitigación están sembrados de forma segura."

@@ -30,6 +30,8 @@ import time
 import datetime
 import subprocess
 import collections
+from heartbeat import marcar_heartbeat
+NOMBRE_DETECTOR = "ddos_detector"
 
 from db_writer import obtener_conexion, insertar_evento_raw, insertar_alarma
 
@@ -337,3 +339,4 @@ if __name__ == "__main__":
     else:
         duracion = int(sys.argv[1]) if len(sys.argv) > 1 else None
         monitorear_en_vivo(duracion_segundos=duracion)
+    marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=1, ok=True)

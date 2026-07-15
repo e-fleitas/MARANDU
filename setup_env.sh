@@ -14,6 +14,7 @@ PROJ_DIR=$(pwd)
 ENV_FILE="$PROJ_DIR/.env"
 VENV_DIR="$PROJ_DIR/venv"
 PREVENTION_DIR="$PROJ_DIR/prevention"
+DETECTION_DIR="$PROJ_DIR/detection"
 
 echo "=============================================================================="
 echo "[+] Iniciando configuración de seguridad de Base de Datos para M.A.R.A.N.D.U..."
@@ -133,6 +134,12 @@ marandu ALL=(root) NOPASSWD: /usr/sbin/sshd -T
 marandu ALL=(root) NOPASSWD: /usr/bin/auditctl -l
 marandu ALL=(root) NOPASSWD: /usr/sbin/auditctl -l
 
+# Permitir al usuario marandu ejecutar los monitores específicos como root sin password
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $DETECTION_DIR/file_integrity_monitor.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $DETECTION_DIR/cron_monitor.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $DETECTION_DIR/ddos_detector.py
+marandu ALL=(root) NOPASSWD: $VENV_DIR/bin/python3 $DETECTION_DIR/sniffer_detect.py
+
 # --- Grupo C: comandos puntuales de mitigation_actions.py ---
 marandu ALL=(root) NOPASSWD: /usr/bin/firewall-cmd --permanent --zone=drop --add-source=*
 marandu ALL=(root) NOPASSWD: /usr/bin/firewall-cmd --permanent --zone=drop --add-rich-rule=*
@@ -144,7 +151,7 @@ marandu ALL=(root) NOPASSWD: /usr/bin/dnf remove -y wireshark
 marandu ALL=(root) NOPASSWD: /usr/bin/dnf remove -y wireshark-cli
 marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop sshd
 marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop crond
-marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop postfix
+marandu ALL=(root) NOPASSWD: /usr/bin/systemctl stop postfix    
 
 # --- Grupo B: kill / renice / cuarentena (mitigation_actions.py refactorizado a subprocess) ---
 marandu ALL=(root) NOPASSWD: /usr/bin/kill -9 *
@@ -169,6 +176,8 @@ server {
     listen 80;
     server_name localhost;
 
+    access_log /var/log/nginx/marandu_access.log;
+
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
@@ -177,6 +186,24 @@ server {
     }
 }
 EOF
+
+# Crear el log de acceso con anticipación (si no existe) y aplicar ACLs
+echo "[+] Configurando permisos ACL para que 'marandu' lea los logs de Nginx..."
+touch /var/log/nginx/marandu_access.log
+chown nginx:adm /var/log/nginx/marandu_access.log
+
+# Aplicar ACL de lectura en el archivo y acceso/ejecución al directorio padre
+setfacl -m u:marandu:rx /var/log/nginx
+setfacl -m u:marandu:r /var/log/nginx/marandu_access.log
+
+# Configurar persistencia de la ACL mediante logrotate
+echo "[+] Asegurando persistencia de permisos tras rotación de logs..."
+if [ -f "/etc/logrotate.d/nginx" ]; then
+    # Insertar la regla de setfacl en el bloque postrotate existente de logrotate
+    if ! grep -q "setfacl -m u:marandu" /etc/logrotate.d/nginx; then
+        sed -i '/postrotate/a \        /usr/bin/setfacl -m u:marandu:r /var/log/nginx/marandu_access.log' /etc/logrotate.d/nginx
+    fi
+fi
 
 # 11. Cortafuegos (firewalld)[cite: 4]
 echo "[+] Configurando reglas de firewalld..."

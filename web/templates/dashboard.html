@@ -278,9 +278,17 @@
             <div class="mb-8">
                 <h2 class="text-lg font-bold text-slate-300 mb-1 tracking-tight">Nivel de Respuesta por Tipo de Alarma
                 </h2>
-                <p class="text-xs text-slate-500 font-mono mb-4">
+                <p class="text-xs text-slate-500 font-mono mb-1">
                     Mínimo = solo notifica · Moderado = acción reversible · Agresivo = acción máxima.
                     Los grupos con piso de seguridad no se pueden bajar de ahí.
+                </p>
+                <p class="text-xs text-slate-500 font-mono mb-4">
+                    <span class="inline-block w-2 h-2 rounded-full mr-1 align-middle bg-emerald-400"></span> detector
+                    activo
+                    <span class="inline-block w-2 h-2 rounded-full mr-1 ml-3 align-middle bg-rose-500"></span> sin
+                    reportar
+                    <span class="inline-block w-2 h-2 rounded-full mr-1 ml-3 align-middle bg-slate-600"></span> nunca
+                    ejecutado
                 </p>
 
                 <div class="bg-slate-800 border border-slate-700 rounded-xl overflow-hidden shadow-lg">
@@ -588,10 +596,26 @@
                 ? "bg-rose-500/10 text-rose-400 border-rose-500/30 animate-pulse"
                 : "bg-slate-700/40 text-slate-500 border-slate-600";
 
+            // Puntito de estado del detector: verde y pulsando si tuvo un
+            // heartbeat reciente (corrió hace poco y sin errores), gris si
+            // todavía no reportó nada, rojo si dejó de reportar o falló.
+            let puntoClase, puntoTitulo;
+            if (item.detector_activo) {
+                puntoClase = "bg-emerald-400 shadow-[0_0_6px_2px_rgba(52,211,153,0.5)] animate-pulse";
+                puntoTitulo = `Detector activo · última ejecución: ${escapeHtml(formatearFecha(item.detector_ultima_ejecucion))}`;
+            } else if (item.detector_ultima_ejecucion) {
+                puntoClase = "bg-rose-500";
+                puntoTitulo = `Detector sin reportar hace rato · última ejecución: ${escapeHtml(formatearFecha(item.detector_ultima_ejecucion))}`;
+            } else {
+                puntoClase = "bg-slate-600";
+                puntoTitulo = "Detector todavía no reportó ninguna ejecución.";
+            }
+            const puntoDetector = `<span class="inline-block w-2 h-2 rounded-full mr-2 align-middle ${puntoClase}" title="${puntoTitulo}"></span>`;
+
             return `
                 <tr data-grupo="${escapeHtml(item.grupo)}" class="hover:bg-slate-800/40 transition-colors">
                     <td class="px-4 py-3">
-                        <p class="font-medium text-slate-200">${escapeHtml(item.etiqueta)}</p>
+                        <p class="font-medium text-slate-200">${puntoDetector}${escapeHtml(item.etiqueta)}</p>
                         ${pisoNota}
                     </td>
                     <td class="px-4 py-3 text-center">

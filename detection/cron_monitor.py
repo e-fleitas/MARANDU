@@ -21,6 +21,8 @@ import sys
 import glob
 from datetime import datetime, timezone
 
+NOMBRE_DETECTOR = "users_monitor"
+
 from db_writer import obtener_conexion, insertar_alarma, insertar_evento_raw
 
 MODULO_NOMBRE = "modulo_ix"

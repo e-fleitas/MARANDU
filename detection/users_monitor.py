@@ -24,6 +24,7 @@ import json
 import subprocess
 import ipaddress
 from datetime import datetime, timezone
+from heartbeat import marcar_heartbeat
 
 # --------------------------------------------------------------------------
 # Configuración (prefijo MRND_ según convención de variables de entorno)
@@ -31,6 +32,7 @@ from datetime import datetime, timezone
 
 MODULO_NOMBRE = "modulo_ii"
 TIPO_ALARMA = "USUARIO_SOSPECHOSO"
+NOMBRE_DETECTOR = "users_monitor"
 
 # Directorio mandatorio de logs (definido también en prevention/rsyslog_centralization.py)
 LOGS_DIR_PRINCIPAL = "/var/log/hips"
@@ -301,9 +303,11 @@ if __name__ == "__main__":
     try:
         total = verificar_usuarios_conectados()
         print(f"[+] Verificación completada. Alarmas emitidas: {total}")
+        marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=total, ok=True)
     except KeyboardInterrupt:
         print("\n[.] Verificación interrumpida por el usuario.")
         sys.exit(0)
     except Exception as e:
         print(f"[-] Error fatal en users_monitor: {e}", file=sys.stderr)
+        marcar_heartbeat(NOMBRE_DETECTOR, alarmas_emitidas=0, ok=False)
         sys.exit(1)
