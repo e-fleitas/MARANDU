@@ -2,24 +2,31 @@
 Módulo de autenticación para M.A.R.A.N.D.U. Dashboard.
 
 Maneja:
-- Verificación de credenciales (bcrypt, comparación en tiempo constante).
+- Verificación de credenciales contra la tabla usuarios_web (bcrypt,
+  comparación en tiempo constante).
 - Sesiones basadas en cookie firmada (via Starlette SessionMiddleware).
 - Tokens CSRF (patrón "synchronizer token" atado a la sesión).
 - Rate limiting simple en memoria contra fuerza bruta en /login.
 
-Requiere las variables de entorno:
+Requiere la variable de entorno:
 - MARANDU_SECRET_KEY
-- MARANDU_ADMIN_USER
-- MARANDU_ADMIN_PASSWORD_HASH   (generado con scripts/generar_hash.py)
+
+Los usuarios ya NO se leen de variables de entorno: se guardan en la
+tabla `usuarios_web` (ver db/models.py). Para dar de alta o resetear
+la contraseña del primer admin, correr `python web/scripts/generar_hash.py`.
 """
 
-import os
 import time
 import secrets
-from typing import Dict, List
+import datetime
+from typing import Dict, List, Optional
 
 import bcrypt
 from fastapi import Request
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from db.models import UsuarioWeb
 
 # bcrypt solo usa los primeros 72 bytes de la contraseña; versiones nuevas
 # de la librería directamente lanzan ValueError si te pasás, en vez de
@@ -39,22 +46,13 @@ def check_password(password: str, hashed: str) -> bool:
     try:
         return bcrypt.checkpw(_prep(password), hashed.encode("utf-8"))
     except ValueError:
-        # Hash con formato inválido/corrupto en la variable de entorno.
+        # Hash con formato inválido/corrupto en la fila de la DB.
         return False
 
 
-ADMIN_USERNAME = os.environ.get("MARANDU_ADMIN_USER")
-ADMIN_PASSWORD_HASH = os.environ.get("MARANDU_ADMIN_PASSWORD_HASH")
-
-if not ADMIN_USERNAME or not ADMIN_PASSWORD_HASH:
-    raise RuntimeError(
-        "Faltan variables de entorno MARANDU_ADMIN_USER y/o MARANDU_ADMIN_PASSWORD_HASH.\n"
-        "Corré `python scripts/generar_hash.py` para generar el hash y definí ambas "
-        "variables (por ejemplo en un archivo .env) antes de levantar la app."
-    )
-
-# Un hash "dummy" para gastar el mismo tiempo de cómputo aunque el usuario no exista,
-# y evitar que un atacante detecte usuarios válidos midiendo tiempos de respuesta.
+# Un hash "dummy" para gastar el mismo tiempo de cómputo aunque el usuario no
+# exista en la tabla, y evitar que un atacante detecte usuarios válidos
+# midiendo tiempos de respuesta.
 _DUMMY_HASH = hash_password("marandu-dummy-password-para-timing-safety")
 
 
@@ -100,16 +98,33 @@ def clear_attempts(request: Request) -> None:
 
 
 # --------------------------------------------------------------------------
-# Credenciales
+# Credenciales (ahora contra la DB)
 # --------------------------------------------------------------------------
-def verify_credentials(username: str, password: str) -> bool:
-    """Verifica usuario/contraseña en tiempo constante respecto a si el user existe."""
-    if secrets.compare_digest(username, ADMIN_USERNAME):
-        return check_password(password, ADMIN_PASSWORD_HASH)
-    # Usuario no coincide: igual corremos el check contra un hash dummy
-    # para que el tiempo de respuesta no filtre si el usuario existe.
-    check_password(password, _DUMMY_HASH)
-    return False
+async def verify_credentials(db: AsyncSession, username: str, password: str) -> Optional[UsuarioWeb]:
+    """Verifica usuario/contraseña contra la tabla usuarios_web, en tiempo
+    constante respecto a si el usuario existe. Devuelve la fila de
+    UsuarioWeb si las credenciales son válidas, o None en caso contrario."""
+    result = await db.execute(
+        select(UsuarioWeb).where(UsuarioWeb.username == username)
+    )
+    user = result.scalar_one_or_none()
+
+    if user is None:
+        # Igual corremos el check contra un hash dummy para que el tiempo
+        # de respuesta no filtre si el usuario existe.
+        check_password(password, _DUMMY_HASH)
+        return None
+
+    if check_password(password, user.password_hash):
+        return user
+
+    return None
+
+
+async def touch_last_login(db: AsyncSession, user: UsuarioWeb) -> None:
+    """Actualiza ultimo_login y persiste. Se llama después de un login exitoso."""
+    user.ultimo_login = datetime.datetime.utcnow()
+    await db.commit()
 
 
 # --------------------------------------------------------------------------

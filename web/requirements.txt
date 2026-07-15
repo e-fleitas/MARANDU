@@ -6,3 +6,6 @@ passlib[bcrypt]
 itsdangerous
 python-dotenv
 psycopg2-binary
+sqlalchemy
+asyncpg
+psutil

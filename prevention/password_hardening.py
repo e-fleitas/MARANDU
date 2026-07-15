@@ -11,11 +11,31 @@ def run_command(command):
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
+
+def get_authselect_state():
+    """Devuelve (profile_id, [features_activas]) leyendo 'authselect current'.
+    Si algo falla, devuelve (None, [])."""
+    success, output = run_command("authselect current")
+    if not success or not output:
+        return None, []
+
+    profile = None
+    features = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Profile ID:"):
+            profile = stripped.split(":", 1)[1].strip()
+        elif stripped.startswith("- "):
+            features.append(stripped[2:].strip())
+
+    return profile, features
+
+
 def apply_password_hardening():
     print("Aplicando hardening de políticas de contraseñas (PAM pwquality)...")
 
     conf_file = "/etc/security/pwquality.conf"
-    
+
     # Parámetros recomendados por CIS Benchmarks que los validadores suelen buscar
     target_settings = {
         "minlen": "14",      # Longitud mínima de 14 caracteres
@@ -45,7 +65,7 @@ def apply_password_hardening():
                     if "=" in stripped or (len(stripped) > len(key) and stripped[len(key)].isspace()):
                         matched_key = key
                         break
-            
+
             if matched_key:
                 new_lines.append(f"{matched_key} = {target_settings[matched_key]}\n")
                 keys_found.add(matched_key)
@@ -67,23 +87,54 @@ def apply_password_hardening():
         print(f"❌ Error al escribir en {conf_file}: {e}")
         sys.exit(1)
 
-    # 5. Forzar a PAM a habilitar la característica usando authselect
+    # 5. Forzar a PAM a habilitar la característica usando authselect.
+    #
+    # Si el .conf tiene minlen/minclass/retry pero pam_pwquality.so no está
+    # efectivamente incluido en el stack PAM activo, esos valores nunca se
+    # aplican en un login real -- el archivo existe pero nadie lo lee.
     print("[*] Habilitando la característica with-pwquality en authselect...")
     success, output = run_command("authselect enable-feature with-pwquality")
-    
+
     if success:
         print("🚀 Hardening de políticas de contraseñas aplicado con éxito.")
+        return
+
+    if "already enabled" in output.lower():
+        print("🚀 Hardening de políticas de contraseñas ya estaba activo en authselect.")
+        return
+
+    # 'enable-feature' puede fallar con "Unknown profile feature" en perfiles
+    # como 'local', donde with-pwquality no se activa incrementalmente sino
+    # que hay que re-seleccionar el perfil completo incluyéndola. Para no
+    # pisar features ya habilitadas (p.ej. with-faillock, activada por
+    # pam_faillock.py), leemos primero el estado actual y las preservamos.
+    print(f"[*] 'enable-feature' no funcionó ({output.strip()}); reintentando con 'select --force'...")
+
+    profile, current_features = get_authselect_state()
+    if not profile:
+        print("⚠️ No se pudo determinar el perfil authselect activo (comando 'authselect current' falló).")
+        print("🚀 El archivo pwquality.conf se actualizó correctamente de todos modos.")
+        return
+
+    features_to_apply = set(current_features)
+    features_to_apply.add("with-pwquality")
+    feature_args = " ".join(sorted(features_to_apply))
+
+    retry_cmd = f"authselect select {profile} {feature_args} --force".strip()
+    success_retry, output_retry = run_command(retry_cmd)
+
+    if success_retry:
+        print(f"🚀 Perfil '{profile}' re-seleccionado con with-pwquality habilitado "
+              f"(features preservadas: {', '.join(sorted(features_to_apply)) or 'ninguna'}).")
     else:
-        # A veces ya está habilitado y authselect devuelve código menor o mensajes de aviso
-        if "already enabled" in output.lower():
-            print("🚀 Hardening de políticas de contraseñas ya estaba activo en authselect.")
-        else:
-            print(f"⚠️ Nota de authselect: {output.strip()}")
-            print("🚀 El archivo pwquality.conf se actualizó correctamente de todos modos.")
+        print(f"⚠️ El reintento con 'select --force' también falló: {output_retry.strip()}")
+        print("🚀 El archivo pwquality.conf se actualizó correctamente de todos modos, "
+              "pero revisar manualmente si pam_pwquality.so quedó incluido en el stack PAM.")
+
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("❌ Este script debe ejecutarse con privilegios de root (sudo).")
         sys.exit(1)
-        
+
     apply_password_hardening()
