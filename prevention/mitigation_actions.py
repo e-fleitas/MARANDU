@@ -574,15 +574,14 @@ async def _resolver_failed_login(alarma: Alarma, session: AsyncSession) -> tuple
     nivel = await obtener_nivel_efectivo(session, ALARM_GRUPO["FAILED_LOGIN_MULTIPLE"])
 
     acciones = []
-    resultados = []
 
     if nivel in ("moderado", "agresivo"):
         if _validar_ip(ip):
-            resultados.append(await asyncio.to_thread(ip_block, ip))
-            acciones.append(f"ip_block({ip})")
+            exito_ip = await asyncio.to_thread(ip_block, ip)
+            acciones.append(f"ip_block({ip})[{'ok' if exito_ip else 'fallo'}]")
         if usuario and _validar_username(usuario):
-            resultados.append(await asyncio.to_thread(bloq_usr, usuario))
-            acciones.append(f"bloq_usr({usuario})")
+            exito_usr = await asyncio.to_thread(bloq_usr, usuario)
+            acciones.append(f"bloq_usr({usuario})[{'ok' if exito_usr else 'fallo'}]")
 
     if nivel == "agresivo" and usuario and _validar_username(usuario):
         nueva_pass = await asyncio.to_thread(change_pass_usr, usuario)
@@ -592,12 +591,21 @@ async def _resolver_failed_login(alarma: Alarma, session: AsyncSession) -> tuple
                 asunto=f"[MARANDU][URGENTE] Password reseteada: {usuario}",
                 cuerpo=f"Se reseteó la contraseña de '{usuario}' por FAILED_LOGIN_MULTIPLE (nivel agresivo).\nNueva contraseña: {nueva_pass}\n",
             )
-        resultados.append(nueva_pass is not None)
-        acciones.append(f"change_pass_usr({usuario})")
+        acciones.append(f"change_pass_usr({usuario})[{'ok' if nueva_pass else 'fallo'}]")
 
     if not acciones:
-        return f"sin_objetivo_valido[{nivel}]", False
-    return f"{'+'.join(acciones)}[{nivel}]", all(resultados)
+        # No había IP bloqueable ni usuario accionable (p.ej. usuario protegido
+        # e IP inválida/no capturada). No hay nada más que este dispatcher
+        # pueda intentar con esta alarma: se marca resuelta para no
+        # reintentarla cada minuto indefinidamente.
+        return f"sin_objetivo_valido[{nivel}]", True
+
+    # Se marca resuelta aun si alguna acción individual falló (p.ej. por falta
+    # de permiso sudo puntual o porque la IP/usuario ya estaba bloqueado de una
+    # alarma anterior): ya se agotaron los intentos posibles para esta alarma
+    # y no tiene sentido seguir reprocesándola cada minuto. El detalle de qué
+    # acción falló queda registrado en 'accion' para poder auditarlo.
+    return "+".join(acciones), True
 
 
 async def _resolver_mail_queue_alta(alarma: Alarma, session: AsyncSession) -> tuple[str, bool]:
