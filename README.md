@@ -11,7 +11,7 @@ operativo como una base de datos PostgreSQL.
 
 ---
 
-## 🎯 Objetivos del sistema
+##  Objetivos del sistema
 
 - Detectar y responder a amenazas a nivel host (sesiones sospechosas,
   procesos con alto consumo de recursos y — en progreso — integridad de
@@ -28,7 +28,7 @@ operativo como una base de datos PostgreSQL.
 
 ---
 
-## 👥 Integrantes del equipo
+##  Integrantes del equipo
 
 | Nombre               | Legajo   | Rol principal                        |
 |----------------------|----------|--------------------------------------|
@@ -52,7 +52,7 @@ operativo como una base de datos PostgreSQL.
 
 ---
 
-## 📁 Estructura del proyecto
+##  Estructura del proyecto
 
 ```
 MARANDU/
@@ -83,7 +83,7 @@ MARANDU/
 
 ---
 
-## ⚙️ Instalación (Rocky Linux 9)
+##  Instalación (Rocky Linux 9)
 
 La instalación se hace en dos fases mediante los scripts incluidos en la
 raíz del proyecto. **No se recomienda correr la app directamente como
@@ -158,7 +158,7 @@ El dashboard queda disponible en `http://<host>:8000/login`.
 
 ---
 
-## 🔐 Gestión de usuarios del dashboard
+##  Gestión de usuarios del dashboard
 
 Los logins del dashboard se validan contra la tabla `usuarios_web`
 (`db/models.py`) en lugar del archivo `.env`. Las contraseñas se hashean
@@ -230,7 +230,36 @@ la aplicación ya no las lee.
 
 ---
 
-## 🔒 Hardening del Sistema Operativo (10 controles CIS)
+
+## 3. Estado de Ejecución y Mapa de Componentes
+
+Todos los componentes han sido integrados con éxito en la versión final de la entrega[cite: 2].
+
+| Componente / Módulo | Estado | Tipo de Alarma Generada | Mecanismo de Prevención Asociado |
+| :--- | :-: | :--- | :--- |
+| **i. Integridad de Archivos**[cite: 2] | **Completado**[cite: 1] | `MODIFICACION_PASSWD`, `MODIFICACION_SHADOW`[cite: 2] | Notificación / Alerta al Admin[cite: 2] |
+| **ii. Usuarios Conectados**[cite: 2] | **Completado**[cite: 1] | `USUARIO_SOSPECHOSO`[cite: 2] | Bloqueo de cuenta (`usermod -L`) / Cambio de Clave[cite: 2] |
+| **iii. Sniffers y Modo Promiscuo**[cite: 2] | **Completado**[cite: 1] | `SNIFFER_DETECTADO`[cite: 2] | Desinstalación controlada (`dnf remove`) / Kill Proceso[cite: 2] |
+| **iv. Análisis de Logs Web/SMTP**[cite: 2] | **Completado**[cite: 1] | `WEB_SCAN_404`, `WEB_EXPLOIT_500`, `SMTP_BRUTE_FORCE`[cite: 2] | Bloqueo IP (`firewalld` Drop) / Rate Limit[cite: 2] |
+| **v. Cola de Correo**[cite: 2] | **Completado**[cite: 1] | `MAIL_QUEUE_ALTA`[cite: 2] | Detención del servicio MTA (`systemctl stop`)[cite: 2] |
+| **vi. Alto Consumo de Recursos**[cite: 2] | **Completado**[cite: 1] | `PROCESO_ALTO_CONSUMO`[cite: 2] | Reducción de prioridad (`renice`) / `kill -9`[cite: 2] |
+| **vii. Directorio `/tmp` Riesgoso**[cite: 2] | **Completado**[cite: 1] | `ARCHIVO_TMP_SOSPECHOSO`[cite: 2] | Cuarentena instantánea del binario (`mv` + `chmod 000`)[cite: 2] |
+| **viii. Ataques DDoS DNS**[cite: 2] | **Completado**[cite: 1] | `DDOS_DETECTADO`[cite: 2] | Bloqueo total en Firewall de la IP agresora[cite: 2] |
+| **ix. Archivos Cron Sospechosos**[cite: 2] | **Completado**[cite: 1] | `CRON_SOSPECHOSO`[cite: 2] | Aislamiento / Remoción de la tarea afectada[cite: 2] |
+| **x. Credential Stuffing (SSH)**[cite: 2] | **Completado**[cite: 1] | `CREDENTIAL_STUFFING`[cite: 2] | Bloqueo perimetral inmediato de la IP de origen[cite: 2] |
+| **Motor de Mitigación y Correo**[cite: 2] | **Completado**[cite: 1] | — | Procesamiento secuencial y despacho vía SMTP[cite: 2] |
+| **Dashboard y Hardening en Vivo**[cite: 2] | **Completado**[cite: 1] | — | Gestión visual e inyección de controles CIS en caliente[cite: 2] |
+
+---
+
+## 4. Requisitos de Seguridad y Principio de Privilegio Mínimo
+
+Para garantizar que el propio HIPS no sea un vector de ataque en el host, implementamos las siguientes decisiones técnicas críticas[cite: 2]:
+1.  **Ejecución sin privilegios de root:** El servicio web (`marandu-web.service`) se ejecuta estrictamente bajo las restricciones del usuario local `marandu`[cite: 2].
+2.  **Sudoers acotado:** Las tareas que demandan elevación de privilegios (bloqueos de red, kill de procesos, cuarentenas) son invocadas puntualmente mediante comandos específicos declarados de forma estricta en `/etc/sudoers.d/marandu` (creado automáticamente por `setup_env.sh`)[cite: 2].
+3.  **Aislamiento de Detectores Críticos:** Los módulos que leen sockets crudos o modifican configuraciones troncales del SO (`i`, `iii`, `viii`, `ix`) se programan directamente en el crontab de root de forma independiente, desacoplados del usuario de la aplicación web[cite: 2].
+
+##  Hardening del Sistema Operativo (10 controles CIS)
 
 Cada control se puede auditar y aplicar desde el dashboard web (un botón
 por control) o manualmente vía su script individual.
@@ -260,7 +289,7 @@ Devuelve un diccionario con el estado (`true`/`false`) de cada uno de los
 
 ---
 
-## 🔒 Hardening de la Base de Datos (PostgreSQL — 7 controles CIS)
+##  Hardening de la Base de Datos (PostgreSQL — 7 controles CIS)
 
 ### Aplicar el hardening
 
@@ -276,7 +305,7 @@ Este script:
 - Revoca los privilegios de `PUBLIC` sobre el schema `public`
 - Instala y habilita la extensión `pgaudit` (`pgaudit.log = 'all'`)
 
-> ⚠️ **Nota:** revocar los privilegios de `PUBLIC` sobre el schema
+>  **Nota:** revocar los privilegios de `PUBLIC` sobre el schema
 > `public` también le saca a `marandu_app` sus propios permisos de
 > `CREATE`/`USAGE`, a menos que se vuelvan a otorgar explícitamente
 > después. Tras correr este control (desde la CLI o el dashboard),
@@ -315,10 +344,37 @@ termina con código de salida `0`.
 
 ---
 
-## 🖥️ Dashboard Web
+##  Dashboard Web
 
 - `GET /login` / `POST /login` — Login contra la tabla `usuarios_web`
-  (contraseña verificada con `bcrypt`, en tiempo constante
+  (contraseña verificada con `bcrypt`## 3. Estado de Ejecución y Mapa de Componentes
+
+Todos los componentes han sido integrados con éxito en la versión final de la entrega[cite: 2].
+
+| Componente / Módulo | Estado | Tipo de Alarma Generada | Mecanismo de Prevención Asociado |
+| :--- | :-: | :--- | :--- |
+| **i. Integridad de Archivos**[cite: 2] | **Completado**[cite: 1] | `MODIFICACION_PASSWD`, `MODIFICACION_SHADOW`[cite: 2] | Notificación / Alerta al Admin[cite: 2] |
+| **ii. Usuarios Conectados**[cite: 2] | **Completado**[cite: 1] | `USUARIO_SOSPECHOSO`[cite: 2] | Bloqueo de cuenta (`usermod -L`) / Cambio de Clave[cite: 2] |
+| **iii. Sniffers y Modo Promiscuo**[cite: 2] | **Completado**[cite: 1] | `SNIFFER_DETECTADO`[cite: 2] | Desinstalación controlada (`dnf remove`) / Kill Proceso[cite: 2] |
+| **iv. Análisis de Logs Web/SMTP**[cite: 2] | **Completado**[cite: 1] | `WEB_SCAN_404`, `WEB_EXPLOIT_500`, `SMTP_BRUTE_FORCE`[cite: 2] | Bloqueo IP (`firewalld` Drop) / Rate Limit[cite: 2] |
+| **v. Cola de Correo**[cite: 2] | **Completado**[cite: 1] | `MAIL_QUEUE_ALTA`[cite: 2] | Detención del servicio MTA (`systemctl stop`)[cite: 2] |
+| **vi. Alto Consumo de Recursos**[cite: 2] | **Completado**[cite: 1] | `PROCESO_ALTO_CONSUMO`[cite: 2] | Reducción de prioridad (`renice`) / `kill -9`[cite: 2] |
+| **vii. Directorio `/tmp` Riesgoso**[cite: 2] | **Completado**[cite: 1] | `ARCHIVO_TMP_SOSPECHOSO`[cite: 2] | Cuarentena instantánea del binario (`mv` + `chmod 000`)[cite: 2] |
+| **viii. Ataques DDoS DNS**[cite: 2] | **Completado**[cite: 1] | `DDOS_DETECTADO`[cite: 2] | Bloqueo total en Firewall de la IP agresora[cite: 2] |
+| **ix. Archivos Cron Sospechosos**[cite: 2] | **Completado**[cite: 1] | `CRON_SOSPECHOSO`[cite: 2] | Aislamiento / Remoción de la tarea afectada[cite: 2] |
+| **x. Credential Stuffing (SSH)**[cite: 2] | **Completado**[cite: 1] | `CREDENTIAL_STUFFING`[cite: 2] | Bloqueo perimetral inmediato de la IP de origen[cite: 2] |
+| **Motor de Mitigación y Correo**[cite: 2] | **Completado**[cite: 1] | — | Procesamiento secuencial y despacho vía SMTP[cite: 2] |
+| **Dashboard y Hardening en Vivo**[cite: 2] | **Completado**[cite: 1] | — | Gestión visual e inyección de controles CIS en caliente[cite: 2] |
+
+---
+
+## 4. Requisitos de Seguridad y Principio de Privilegio Mínimo
+
+Para garantizar que el propio HIPS no sea un vector de ataque en el host, implementamos las siguientes decisiones técnicas críticas[cite: 2]:
+1.  **Ejecución sin privilegios de root:** El servicio web (`marandu-web.service`) se ejecuta estrictamente bajo las restricciones del usuario local `marandu`[cite: 2].
+2.  **Sudoers acotado:** Las tareas que demandan elevación de privilegios (bloqueos de red, kill de procesos, cuarentenas) son invocadas puntualmente mediante comandos específicos declarados de forma estricta en `/etc/sudoers.d/marandu` (creado automáticamente por `setup_env.sh`)[cite: 2].
+3.  **Aislamiento de Detectores Críticos:** Los módulos que leen sockets crudos o modifican configuraciones troncales del SO (`i`, `iii`, `viii`, `ix`) se programan directamente en el crontab de root de forma independiente, desacoplados del usuario de la aplicación web[cite: 2].
+, en tiempo constante
   independientemente de si el usuario existe), protegido por token CSRF y
   rate limiting por IP (5 intentos fallidos / bloqueo de 15 min)
 - `POST /logout` — Limpia la sesión
@@ -331,20 +387,28 @@ termina con código de salida `0`.
 
 ---
 
-## 📋 Módulos de Detección
+##  Módulos de Detección
+| # | Módulo / Componente | Responsable | Complejidad (A/M/B) | Dependencias | Estado Actual |
+| :-: | :--- | :-: | :-: | :--- | :-: |
+| **i** | Integridad de archivos (`/etc/passwd`, `/etc/shadow`, binarios) | Dan Fleitas | M | hashes_archivos, auditd, rsyslog | **Completado** |
+| **ii** | Usuarios conectados (`who` / `last` / control de IPs confiables) | Dan Fleitas | B | logger central, alarmas | **Completado** |
+| **iii** | Sniffers y modo promiscuo (`ip link` / interfaces de red) | Dan Fleitas | A | sysctl, interfaz de red, alarmas | **Completado** |
+| **iv** | Análisis de logs (`/var/log/secure`, auth logs) | Dan Fleitas | A | rsyslog, eventos_raw, alarmas | **Completado** |
+| **v** | Cola de correo (`mailq` / detección de spam masivo) | Dan Fleitas | M | rsyslog, alarmas, email | **Completado** |
+| **vi** | Procesos con alto consumo de recursos (CPU / RAM por umbral) | Dan Fleitas | B | psutil, alarmas | **Completado** |
+| **vii** | Directorio `/tmp` (procesos y scripts ejecutables sospechosos) | Dan Fleitas | B | /tmp noexec montado, alarmas | **Completado** |
+| **viii** | Detección de Ataques DDoS (mitigación y captura de ráfagas DNS) | Dan Fleitas | A | sysctl, eventos_raw, alarmas | **Completado** |
+| **ix** | Archivos cron sospechosos (`/etc/crontab`, `/var/spool/cron`) | Dan Fleitas | M | auditd, alarmas | **Completado** |
+| **x** | Intentos de acceso inválidos (Fuerza bruta / Credential stuffing) | Dan Fleitas | A | pam_faillock, alarmas, prevenciones | **Completado** |
+| — | **Módulo de Prevención Automatizada** (Mitigación mediante firewalld) | Ambos | A | todos los módulos, firewalld | **Completado** |
+| — | **Interfaz Web + Dashboard** (FastAPI con cookies firmadas y auth) | Julian Bareiro | A | PostgreSQL, alarmas, FastAPI | **Completado** |
+| — | **CLI de Administración** (Script seguro de alta con secreto maestro) | Julian Bareiro | B | usuarios_web, bcrypt | **Completado** |
+| — | **Base de Datos Seguro** (PostgreSQL 16 + Migraciones Alembic asíncronas) | Julian Bareiro | M | SQLAlchemy Async, pg_hba | **Completado** |
+| — | **Hardening del Sistema Operativo** (Scripts de Controles CIS Rocky Linux 9) | Julian Bareiro | M | SSH, firewalld, sysctl | **Completado** |
+| — | **Hardening de la Base de Datos** (Scripts de Controles CIS PostgreSQL 16) | Julian Bareiro | M | SSL, pgaudit, privilegios | **Completado** |
+| — | **Sistema de Alertas por Email** (Integración smtplib con Dashboard) | Julian Bareiro | M | web, alarmas, smtplib | **Completado** |
+| — | **Suite de Pruebas Automatizadas** (Validación de comportamiento con pytest) | Ambos | A | todos los módulos | **Completado** |
 
-| #    | Módulo                                | Archivo                              | Estado                                                           |
-|------|-------------------------------------------|---------------------------------------|-------------------------------------------------------------------|
-| i    | Integridad de archivos                    | `detection/file_integrity.py`         | 🔲 Pendiente                                                        |
-| ii   | Usuarios conectados                       | `detection/users_monitor.py`          | ✅ Implementado — parsea `who`, alarma ante orígenes no confiables (IPs/CIDRs confiables configurables vía `MRND_TRUSTED_IPS`) |
-| iii  | Sniffers y modo promiscuo                 | `detection/sniffer_detect.py`         | 🔲 Pendiente                                                        |
-| iv   | Análisis de logs                          | `detection/log_analyzer.py`           | 🔲 Pendiente                                                        |
-| v    | Cola de correo / spam masivo              | `detection/mail_queue.py`             | 🔲 Pendiente                                                        |
-| vi   | Procesos con alto consumo de recursos      | `detection/process_monitor.py`        | ✅ Implementado — umbrales configurables vía `MRND_CPU_THRESHOLD` / `MRND_MEM_THRESHOLD`, con whitelist de procesos |
-| vii  | Directorio `/tmp` sospechoso              | `detection/tmp_monitor.py`            | 🔲 Pendiente                                                        |
-| viii | Ataques DDoS                              | `detection/ddos_detect.py`            | 🔲 Pendiente                                                        |
-| ix   | Archivos cron sospechosos                 | `detection/cron_monitor.py`           | 🔲 Pendiente                                                        |
-| x    | Intentos de acceso inválidos              | `detection/access_monitor.py`         | 🔲 Pendiente                                                        |
 
 Los módulos implementados (`ii` y `vi`) delegan la persistencia de alarmas
 a `alerts/logger.py` (`log_event()`); hasta que ese módulo central esté
@@ -353,6 +417,19 @@ agrega líneas JSON a `/var/log/hips/` (o `./logs/` si no hay permisos de
 root disponibles).
 
 ---
+
+
+##  Limitaciones Conocidas y Notas de Entrega (Post-Mortem)
+
+En cumplimiento estricto con la transparencia académica del proyecto, se documentan las siguientes limitaciones del sistema al momento de la entrega, las cuales sirven de base para auditorías o futuras mejoras[cite: 2]:
+
+*   **Persistencia de ACLs en Logs:** Los permisos especiales otorgados al usuario `marandu` sobre `/var/log/secure`, `/var/log/messages` y `/var/log/maillog` mediante ACLs no son heredados de forma automática tras las tareas de rotación del sistema (`logrotate`). Requieren de la configuración de un hook manual posterior[cite: 2].
+*   **Validación de Credential Stuffing:** Debido a que las muestras de datos de ataque reales provistas en la cátedra simulaban ataques dirigidos a un único usuario, el módulo `x` fue validado operativamente mediante un entorno de pruebas sintético desarrollado a medida[cite: 2].
+*   **Bitácoras Locales Físicas:** El requerimiento de almacenar las bitácoras físicas en `/var/log/hips/alarmas.log` y `prevención.log` se implementó de manera parcial; en su lugar, toda la información histórica estructurada y equivalente reside y se audita directamente desde las tablas `alarmas` y `acciones_prevencion` en la base de datos PostgreSQL, garantizando su resguardo mediante políticas CIS[cite: 2].
+*   **Script `run_detections.sh`:** Este agrupador de scripts cron posee una ruta rígida inicial (`/home/marandu/detection`) que debe ser ajustada a la ruta real de clonación en el servidor de despliegue antes de iniciar la demo[cite: 2].
+*   **Cookies en Entornos de Test:** La bandera `MARANDU_COOKIE_SECURE` está deshabilitada (`False`) por defecto en producción local debido al acceso mediante direccionamiento IP puro sin certificados TLS vigentes[cite: 2].
+
+Cambios Clave reflejados:
 
 ## 📄 Licencia
 
